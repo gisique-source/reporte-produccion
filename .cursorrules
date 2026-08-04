@@ -1,0 +1,51 @@
+# Contexto del Proyecto: Monitor de Balanza e Impresión de Etiquetas
+
+## Objetivo Principal
+Desarrollar una aplicación de escritorio local en Python para Windows que capture en tiempo real el peso de un indicador industrial **Precix-Weight** vía serie RS-232 (puerto DB9 / COM1), muestre los datos en una interfaz gráfica moderna/intuitiva y gestione la **impresión rápida de etiquetas de pesaje** para eliminar cuellos de botella en la planta de extrusión.
+
+## Stack Tecnológico
+- **Lenguaje:** Python 3.12+
+- **Comunicación Serie:** `pyserial` (9600 8N1, lectura en hilo secundario/asíncrono)
+- **Interfaz Gráfica (GUI):** `tkinter` / `ttk` (diseño limpio, alto contraste, controles grandes para operarios de planta)
+- **Generación/Impresión de Etiquetas:** `python-docx` o plantillas `Win32Print` / `win32printing` / archivos de texto directo a la impresora (RAW/ZPL/TSPL) para **máxima velocidad de impresión** sin demoras de spooler.
+- **Empaquetado:** `PyInstaller` (para generar un ejecutable standalone `.exe`).
+
+## Reglas de Arquitectura y Código
+
+1. **Rendimiento e Impresión Rápida (Requisito Crítico):**
+   - La captura de puerto serie NUNCA debe bloquear la interfaz gráfica (usar `threading`).
+   - El módulo de impresión debe ser directo y ultrarrápido. Evitar generar PDFs pesados antes de imprimir; priorizar envío directo al driver de Windows (`win32print`) o comandos de impresora térmica (ZPL/TSPL/ESC-POS) según la impresora de etiquetas instalada.
+
+2. **UX / UI para Planta Industrial:**
+   - La pantalla debe mostrar el peso con tipografía grande y clara (visible a distancia).
+   - Indicador visual explícito sobre la estabilidad del peso (`ST` = Estable en verde / `US` = Inestable en amarillo).
+   - Botón de acción rápido ("Imprimir Etiqueta" o "Registrar Pesaje") ejecutable con un clic o mediante la tecla `ENTER/ESPACIO`.
+   - Ajuste de frecuencia de actualización en pantalla (por defecto 0.5s a 1.0s).
+
+3. **Manejo de Errores y Resiliencia:**
+   - Si el puerto serie se desconecta, la app no debe cerrarse bruscamente. Debe mostrar una alerta en pantalla e intentar reconectar de manera segura.
+   - Filtrado estricto mediante Expresiones Regulares (`re`) para extraer correctamente el valor numérico del peso limpíando la trama `ST,GS     XX.X,kg`.
+
+4. **Compatibilidad para .exe (PyInstaller):**
+   - Asegurar que todas las rutas a recursos (imágenes, plantillas, config) usen `os.path` dinámico compatible con entornos congelados (`sys._MEIPASS`).
+
+
+5. IMPORTANTE: modulariza el sistema, que no haya un solo archivo para todo, trata de modularizar si el archivo tiene más de 500 líneas, se permite entre 250 y 550 líneas por archivo
+
+6. Implementa componentes reutilizables
+
+7. Prohibido poder eliminar un registro de las tablas maestro como cliente, color, denier, corte mm
+
+Configura el lienzo/módulo de impresión en Python para que coincida exactamente con los parámetros de la plantilla Excel:
+
+1. Configuración de página:
+   - Formato A4 Vertical (210mm x 297mm).
+   - Margen Superior: 15mm (1.5cm).
+   - Margen Izquierdo: 11mm (1.1cm).
+   - Margen Derecho: 5mm (0.5cm).
+   - Margen Inferior: 5mm (0.5cm).
+
+2. Estructura del área de impresión:
+   - La etiqueta ocupa una cuadrícula equivalente al rango de celdas P52:Y72 de Excel.
+   - Posiciona el encabezado "Gexim", los datos fijos del producto (Color, Cliente, Lote, Dn, Corte, N° Fardo, Fecha) y los pesos dinámicos (P. Bruto y P. Neto) manteniendo el maquetado sin escalado (100% escala).
+   - Incluye el generador de Código de Barras al final de la etiqueta.
