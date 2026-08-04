@@ -1,3 +1,6 @@
 __pycache__/
 *.db
 ui/__pycache__/
+.env
+.env.local
+.env.*.local

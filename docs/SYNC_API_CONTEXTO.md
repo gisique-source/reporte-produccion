@@ -29,33 +29,37 @@ La UI **no espera** a la nube para imprimir ni guardar.
 
 ## 2. Configuración en la PC de planta (cliente)
 
-Variables de entorno (Windows):
+Variables de entorno (Windows / Vercel del sistema integrado):
 
 | Variable | Valores | Default | Descripción |
 |----------|---------|---------|-------------|
 | `PRECIX_SYNC_ENABLED` | `1` / `0` | `0` | Activa el hilo de sync |
-| `PRECIX_SYNC_URL` | URL absoluta | `https://example.com/api/pesajes` | Endpoint `POST` del pesaje |
-| _(código)_ `SYNC_INTERVAL_S` | — | `30` | Segundos entre ciclos |
-| _(código)_ `SYNC_TIMEOUT_S` | — | `10` | Timeout HTTP por request |
+| `PRECIX_SYNC_URL` | URL absoluta | (ejemplo) | `POST /api/v1/precix/pesajes` |
+| `PRECIX_SYNC_TOKEN` | string | _(vacío)_ | **Obligatorio** si sync ON → `Authorization: Bearer …` |
+| `PRECIX_DEFAULT_PLANTA` o `PRECIX_PLANTA` | string | `ATE-EXTRUSORA-1` | Planta en body `planta` + header `X-Precix-Planta` |
+| `PRECIX_SYNC_INTERVAL_MIN` | número | `1` | Minutos entre ciclos (mín. efectivo ~15 s) |
+| `PRECIX_SYNC_INTERVAL_S` | número | — | Alternativa en segundos (si no hay `_MIN`) |
+| `PRECIX_SYNC_TIMEOUT_S` | número | `10` | Timeout HTTP por request |
 
 Ejemplo PowerShell (sesión actual):
 
 ```powershell
 $env:PRECIX_SYNC_ENABLED = "1"
-$env:PRECIX_SYNC_URL = "https://tu-dominio.com/api/v1/precix/pesajes"
+$env:PRECIX_SYNC_URL = "https://tu-dominio.vercel.app/api/v1/precix/pesajes"
+$env:PRECIX_SYNC_TOKEN = "el-mismo-token-que-en-Vercel"
+$env:PRECIX_DEFAULT_PLANTA = "ATE-EXTRUSORA-1"
+$env:PRECIX_SYNC_INTERVAL_MIN = "1"
 python app.py
 ```
 
-Ejemplo permanentes (sistema):
+Ver también `.env.sync.example` en la raíz del repo.
 
-```text
-PRECIX_SYNC_ENABLED=1
-PRECIX_SYNC_URL=https://tu-dominio.com/api/v1/precix/pesajes
-```
+**UI del sistema integrado:** Producción → **Reportes de producción (pesajes)**  
+ruta: `/operaciones/produccion/pesajes` (listado del día, filtros fecha/lote/cliente/planta, totales).
 
-En la UI: badge `Sync OFF · N pendientes` / `Sync OK · N pendientes` / error HTTP.
+Migración SQL (lado nube): `supabase/migrations/20250804150000_precix_pesajes.sql`
 
-> Hoy el cliente **no envía API Key ni Bearer**. Si tu API exige auth, hay que ampliar `sync.py` (recomendado: `PRECIX_SYNC_TOKEN` → header `Authorization: Bearer …`). Ver §7.
+> El cliente envía `Authorization: Bearer {PRECIX_SYNC_TOKEN}`. Sin token la API responde **401**.
 
 ---
 
@@ -66,12 +70,20 @@ En la UI: badge `Sync OFF · N pendientes` / `Sync OK · N pendientes` / error H
 ```http
 POST {PRECIX_SYNC_URL}
 Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {PRECIX_SYNC_TOKEN}
+X-Precix-Planta: {PRECIX_DEFAULT_PLANTA}
 ```
 
 - Un **registro por request** (no batch todavía).
+- El body incluye además `"planta": "ATE-EXTRUSORA-1"` cuando está configurada.
 - Orden: por `id` local ascendente.
-- Si un POST falla, **corta el lote** y reintenta ese registro en el próximo ciclo (no pierde datos).
-- Éxito = status HTTP **200–299**. El body de respuesta se ignora.
+- Si un POST falla, **corta el lote** y reintenta ese registro en el próximo ciclo.
+- Éxito = status HTTP **200** (upsert) o **201** (create). Body típico:
+
+```json
+{ "ok": true, "id_remoto": "uuid", "id_local": 42, "duplicado": false }
+```
 
 ### 3.2 Body JSON (payload real — `RegistroPesaje.to_sync_payload`)
 
@@ -278,24 +290,24 @@ Al implementar la API, deja listo el campo `activo` y un upsert; luego se amplia
 
 ---
 
-## 7. Auth sugerida (ampliación cliente + API)
+## 7. Auth (cliente + API)
 
-Header propuesto:
+Header enviado por Precix:
 
 ```http
-Authorization: Bearer <token_planta>
+Authorization: Bearer <PRECIX_SYNC_TOKEN>
 Content-Type: application/json
 X-Precix-Planta: ATE-EXTRUSORA-1
 ```
 
-Env en planta (cuando se implemente en `sync.py`):
+Env en planta:
 
 ```text
 PRECIX_SYNC_TOKEN=...
-PRECIX_PLANTA=ATE-EXTRUSORA-1
+PRECIX_DEFAULT_PLANTA=ATE-EXTRUSORA-1
 ```
 
-Hasta entonces, puedes proteger el endpoint por IP de planta / VPN / reverse proxy.
+Sin token → la API responde **401** y el badge muestra el error.
 
 ---
 
@@ -372,11 +384,9 @@ function UpsertPesaje(body, planta):
 
 ## 12. Resumen ejecutivo para la otra PC
 
-1. Implementá **un POST** que reciba el JSON de pesaje (§3.2).  
-2. Guardá con **UPSERT** `(planta, id_local)`.  
-3. En la PC de planta: `PRECIX_SYNC_ENABLED=1` + `PRECIX_SYNC_URL=tu-endpoint`.  
-4. Entidad crítica: **Pesaje/Fardo**; maestros son texto embebido hoy.  
-5. Dejá `activo` listo para soft-delete futuro.  
-6. Sumá auth por planta cuando puedas.
-
-Si necesitás un OpenAPI (`openapi.yaml`) o un stub Node/Laravel/FastAPI de ejemplo, pedilo sobre esta misma base.
+1. Migración: `supabase/migrations/20250804150000_precix_pesajes.sql`
+2. Vercel: `PRECIX_SYNC_TOKEN` + `PRECIX_DEFAULT_PLANTA=ATE-EXTRUSORA-1`
+3. Planta: mismas vars + `PRECIX_SYNC_ENABLED=1` + URL `/api/v1/precix/pesajes`
+4. Cliente ya envía **Bearer** + `planta` + intervalo en minutos
+5. UI nube: **Reportes de producción (pesajes)** (`/operaciones/produccion/pesajes`)
+6. Soft-delete / maestros: fase 2 en el cliente

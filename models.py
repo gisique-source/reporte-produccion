@@ -94,6 +94,29 @@ class ResumenDia:
 
 
 @dataclass
+class RegistroAuditoriaSync:
+    """Fila de historial de subidas a la API nube."""
+
+    id: int
+    enviado_en: str
+    pesaje_id: int
+    id_remoto: str
+    http_status: int
+    ok: int
+    duplicado: int
+    planta: str
+    nro_fardo: str
+    lote: str
+    cliente: str
+    color: str
+    peso_bruto: float
+    peso_neto: float
+    fecha_hora_pesaje: str
+    mensaje: str
+    url: str
+
+
+@dataclass
 class MaestroItem:
     """Registro de tabla maestro (cliente, color, denier, corte)."""
 

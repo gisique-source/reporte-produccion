@@ -2,9 +2,12 @@
 Precix-Weight — Monitor de balanza, etiquetas y registros Gexim.
 Punto de entrada. Ejecutar: python app.py
 
-Sync nube (opcional):
+Sync nube (sistema integrado):
   set PRECIX_SYNC_ENABLED=1
-  set PRECIX_SYNC_URL=https://tu-api/pesajes
+  set PRECIX_SYNC_URL=https://tu-dominio.vercel.app/api/v1/precix/pesajes
+  set PRECIX_SYNC_TOKEN=el-mismo-token-que-en-Vercel
+  set PRECIX_DEFAULT_PLANTA=ATE-EXTRUSORA-1
+  set PRECIX_SYNC_INTERVAL_MIN=1
 """
 
 from ui import PrecixApp

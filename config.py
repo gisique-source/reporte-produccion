@@ -40,13 +40,40 @@ WEB = "www.gexim.com.pe"
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_APP_DIR, "pesajes.db")
 
-SYNC_INTERVAL_S = 30
 SYNC_API_URL = os.environ.get(
     "PRECIX_SYNC_URL",
-    "https://example.com/api/pesajes",  # reemplazar por endpoint real
+    "https://example.com/api/v1/precix/pesajes",
 )
 SYNC_ENABLED = os.environ.get("PRECIX_SYNC_ENABLED", "0") == "1"
-SYNC_TIMEOUT_S = 10
+SYNC_TOKEN = (os.environ.get("PRECIX_SYNC_TOKEN") or "").strip()
+# Código de planta (opcional en body/header; la API puede usar PRECIX_DEFAULT_PLANTA)
+SYNC_PLANTA = (
+    os.environ.get("PRECIX_PLANTA")
+    or os.environ.get("PRECIX_DEFAULT_PLANTA")
+    or "ATE-EXTRUSORA-1"
+).strip()
+SYNC_TIMEOUT_S = int(os.environ.get("PRECIX_SYNC_TIMEOUT_S", "10") or "10")
+
+
+def _sync_interval_seconds() -> int:
+    """
+    Intervalo entre ciclos de sync.
+    Preferir PRECIX_SYNC_INTERVAL_MIN (minutos); si no, PRECIX_SYNC_INTERVAL_S;
+    default 1 minuto.
+    """
+    raw_min = os.environ.get("PRECIX_SYNC_INTERVAL_MIN")
+    raw_sec = os.environ.get("PRECIX_SYNC_INTERVAL_S")
+    try:
+        if raw_min is not None and str(raw_min).strip() != "":
+            return max(15, int(float(str(raw_min).replace(",", ".")) * 60))
+        if raw_sec is not None and str(raw_sec).strip() != "":
+            return max(15, int(float(str(raw_sec).replace(",", "."))))
+    except ValueError:
+        pass
+    return 60  # 1 minuto
+
+
+SYNC_INTERVAL_S = _sync_interval_seconds()
 
 # Modo correlativo de Nº Fardo (persistido también en SQLite)
 # "continuar" = último global + 1 (incluye día anterior)

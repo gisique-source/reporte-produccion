@@ -6,10 +6,11 @@ import tkinter as tk
 from datetime import date
 from tkinter import ttk
 
-from config import PORT, SYNC_ENABLED
+from config import PORT, SYNC_ENABLED, SYNC_INTERVAL_S, SYNC_TOKEN
 from db import PesajeDatabase
 from serial_reader import SerialWeightReader
 from sync import SyncWorker
+from ui.auditoria_view import AuditoriaSyncView
 from ui.etiqueta_editor_view import EtiquetaEditorView
 from ui.hoja_dia_view import HojaDiaView
 from ui.maestros_view import MaestrosView
@@ -96,6 +97,7 @@ class PrecixApp(tk.Tk):
             self.nb, self.db, on_open_day=self._abrir_dia
         )
         self.view_reportes = ReportesView(self.nb, self.db)
+        self.view_auditoria = AuditoriaSyncView(self.nb, self.db)
         self.view_etiqueta = EtiquetaEditorView(self.nb)
         self.view_maestros = MaestrosView(
             self.nb,
@@ -107,8 +109,17 @@ class PrecixApp(tk.Tk):
         self.nb.add(self.view_hoja, text="  Hoja  ")
         self.nb.add(self.view_mes, text="  Resumen mensual  ")
         self.nb.add(self.view_reportes, text="  Reportes  ")
+        self.nb.add(self.view_auditoria, text="  Auditoría  ")
         self.nb.add(self.view_etiqueta, text="  Etiqueta  ")
         self.nb.add(self.view_maestros, text="  Maestros  ")
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+    def _on_tab_changed(self, _event=None) -> None:
+        try:
+            if self.nb.select() == str(self.view_auditoria):
+                self.view_auditoria.refrescar()
+        except tk.TclError:
+            pass
 
     def _on_maestros_change(self) -> None:
         self.view_pesaje.refrescar_maestros()
@@ -131,14 +142,21 @@ class PrecixApp(tk.Tk):
                 text=f"Sync OFF · {pend} pendientes locales",
                 fg=Theme.MUTED,
             )
+        elif not SYNC_TOKEN:
+            self.lbl_sync.config(
+                text=f"Sync: falta PRECIX_SYNC_TOKEN · {pend} pend.",
+                fg=Theme.US_COLOR,
+            )
         elif self.sync.last_error:
             self.lbl_sync.config(
                 text=f"Sync: {pend} pend. · {self.sync.last_error}",
                 fg=Theme.US_COLOR,
             )
         else:
+            cada = f"cada {max(1, SYNC_INTERVAL_S // 60)} min" if SYNC_INTERVAL_S >= 60 else f"cada {SYNC_INTERVAL_S}s"
+            ok = f" · OK {self.sync.last_ok_at}" if self.sync.last_ok_at else ""
             self.lbl_sync.config(
-                text=f"Sync OK · {pend} pendientes",
+                text=f"Sync {cada} · {pend} pend.{ok}",
                 fg=Theme.ST_COLOR if pend == 0 else Theme.MUTED,
             )
         self.after(5000, self._refresh_sync_badge)
