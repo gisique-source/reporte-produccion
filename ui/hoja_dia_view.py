@@ -62,6 +62,7 @@ class HojaDiaView(tk.Frame):
         self.var_neto = tk.StringVar(value="---.--")
         self.var_hint = tk.StringVar(value="")
         self.var_msg = tk.StringVar(value="")
+        self.var_modo = tk.StringVar(value="SIGUIENTE FARDO")
 
         self.var_nro = tk.StringVar()
         self.var_cliente = tk.StringVar()
@@ -79,6 +80,10 @@ class HojaDiaView(tk.Frame):
         self._target_id: Optional[int] = None
         self._peso_edit: Optional[tuple[float, float, float, float, float]] = None
         # (total, bruto, neto, tara_c, tara_f) del registro en edición
+        self._tara_prep: tuple[float, float] = (TARA_CARRETA_KG, TARA_FARDO_KG)
+        self._modo_nuevo = True  # hueco «siguiente fardo» listo
+        self._force_siguiente = False
+        self._ignore_tree_select = False
         self._frozen = False
         self._foto: Optional[dict] = None
         self._printing = False
@@ -151,10 +156,21 @@ class HojaDiaView(tk.Frame):
             activebackground=Theme.BG,
             activeforeground=Theme.FG,
         ).pack(side=tk.LEFT)
-        secondary_button(tools, "Ocultar seleccionado", self.ocultar_seleccionado).pack(
+
+        # Acciones del fardo seleccionado (siempre visibles arriba de la tabla)
+        secondary_button(
+            tools, "＋ Siguiente fardo", self.preparar_siguiente
+        ).pack(side=tk.LEFT, padx=(12, 0))
+        secondary_button(
+            tools, "Imprimir seleccionado", self.imprimir
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+        secondary_button(
+            tools, "Guardar seleccionado", self.guardar
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+        secondary_button(tools, "Ocultar", self.ocultar_seleccionado).pack(
             side=tk.RIGHT, padx=(6, 0)
         )
-        secondary_button(tools, "Restaurar seleccionado", self.restaurar_seleccionado).pack(
+        secondary_button(tools, "Restaurar", self.restaurar_seleccionado).pack(
             side=tk.RIGHT
         )
 
@@ -191,6 +207,9 @@ class HojaDiaView(tk.Frame):
         self.tree.tag_configure("bruto", foreground="#e74c3c")
         self.tree.tag_configure("ultimo", background="#1e3a5f")
         self.tree.tag_configure("oculto", foreground="#888888")
+        self.tree.tag_configure(
+            "siguiente", foreground="#2ecc71", background="#14301f"
+        )
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Delete>", lambda _e: self.ocultar_seleccionado())
         # Ctrl+V en la hoja (fuera de Entry) abre carga masiva
@@ -201,8 +220,27 @@ class HojaDiaView(tk.Frame):
         bar = tk.Frame(parent, bg=Theme.PANEL, padx=10, pady=8)
         bar.pack(fill=tk.X, padx=12, pady=(0, 2))
 
-        # Peso + estado
-        left = tk.Frame(bar, bg=Theme.PANEL)
+        # Título de modo (edición vs siguiente)
+        modo_fr = tk.Frame(bar, bg=Theme.PANEL)
+        modo_fr.pack(fill=tk.X, pady=(0, 6))
+        self.lbl_modo = tk.Label(
+            modo_fr,
+            textvariable=self.var_modo,
+            font=("Segoe UI", 12, "bold"),
+            fg=Theme.ST_COLOR,
+            bg=Theme.PANEL,
+            anchor="w",
+        )
+        self.lbl_modo.pack(side=tk.LEFT)
+        secondary_button(
+            modo_fr, "＋ Preparar siguiente", self.preparar_siguiente
+        ).pack(side=tk.RIGHT)
+
+        # Fila 1: peso + campos
+        row1 = tk.Frame(bar, bg=Theme.PANEL)
+        row1.pack(fill=tk.X)
+
+        left = tk.Frame(row1, bg=Theme.PANEL)
         left.pack(side=tk.LEFT, padx=(0, 10))
 
         self.lbl_peso = tk.Label(
@@ -250,8 +288,7 @@ class HojaDiaView(tk.Frame):
             width=7,
         ).pack(side=tk.LEFT)
 
-        # Campos compactos: maestros (combo) + lote/op/fardo
-        mid = tk.Frame(bar, bg=Theme.PANEL)
+        mid = tk.Frame(row1, bg=Theme.PANEL)
         mid.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
 
         def _lab_col(parent, lab: str):
@@ -292,57 +329,65 @@ class HojaDiaView(tk.Frame):
         self.cb_operario = combo_entry(col, self.var_operario, width=8)
         self.cb_operario.pack()
 
-        # Botones a la derecha
-        right = tk.Frame(bar, bg=Theme.PANEL)
-        right.pack(side=tk.RIGHT, padx=(8, 0))
+        # Fila 2: botones siempre visibles a todo el ancho
+        row2 = tk.Frame(bar, bg=Theme.PANEL)
+        row2.pack(fill=tk.X, pady=(10, 0))
 
         self.btn_foto = tk.Button(
-            right,
+            row2,
             text="CAPTURAR",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 13, "bold"),
             fg="#ffffff",
             bg=Theme.ACCENT,
             activeforeground="#ffffff",
             activebackground="#3d7cef",
             relief=tk.FLAT,
-            padx=16,
-            pady=10,
+            padx=22,
+            pady=12,
             cursor="hand2",
             command=self.tomar_foto,
         )
-        self.btn_foto.pack(side=tk.LEFT, padx=(0, 8))
+        self.btn_foto.pack(side=tk.LEFT, padx=(0, 10))
 
         self.btn_guardar = tk.Button(
-            right,
+            row2,
             text="GUARDAR",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 13, "bold"),
             fg="#ffffff",
             bg="#6c5ce7",
             activeforeground="#ffffff",
             activebackground="#7d6ff0",
             relief=tk.FLAT,
-            padx=16,
-            pady=10,
+            padx=22,
+            pady=12,
             cursor="hand2",
             command=self.guardar,
         )
-        self.btn_guardar.pack(side=tk.LEFT, padx=(0, 8))
+        self.btn_guardar.pack(side=tk.LEFT, padx=(0, 10))
 
         self.btn_print = tk.Button(
-            right,
-            text="IMPRIMIR",
-            font=("Segoe UI", 12, "bold"),
+            row2,
+            text="IMPRIMIR / SUBIR",
+            font=("Segoe UI", 13, "bold"),
             fg="#ffffff",
             bg=Theme.BTN_BG,
             activeforeground="#ffffff",
             activebackground=Theme.BTN_ACTIVE,
             relief=tk.FLAT,
-            padx=16,
-            pady=10,
+            padx=22,
+            pady=12,
             cursor="hand2",
             command=self.imprimir,
         )
         self.btn_print.pack(side=tk.LEFT)
+
+        tk.Label(
+            row2,
+            text="En «Siguiente»: peso en vivo → Bruto/Neto auto → CAPTURAR → IMPRIMIR",
+            font=("Segoe UI", 9),
+            fg=Theme.MUTED,
+            bg=Theme.PANEL,
+        ).pack(side=tk.LEFT, padx=(16, 0))
 
         hint_fr = tk.Frame(parent, bg=Theme.BG)
         hint_fr.pack(fill=tk.X, padx=12, pady=(0, 2))
@@ -464,39 +509,102 @@ class HojaDiaView(tk.Frame):
         )
         self._regs_activos = activos
 
-        # Conservar selección al refrescar; si no, último activo
+        # Fila fantasma: siguiente fardo (hueco listo para pesar)
+        nro_sig = self.db.siguiente_nro_fardo(dia=self.fecha)
+        last = activos[-1] if activos else None
+        self.tree.insert(
+            "",
+            tk.END,
+            iid="__nuevo__",
+            values=(
+                nro_sig,
+                last.cliente if last else "—",
+                last.lote if last else "—",
+                last.color if last else "—",
+                last.denier if last else "—",
+                last.corte if last else "—",
+                "…",
+                f"{(last.tara_carreta if last and last.tara_carreta > 0 else TARA_CARRETA_KG):.2f}",
+                f"{(last.tara_fardo if last and last.tara_fardo > 0 else TARA_FARDO_KG):.2f}",
+                "…",
+                "…",
+                "—",
+                last.operario if last else "—",
+                "▶ SIG.",
+            ),
+            tags=("siguiente",),
+        )
+
         keep = self._selected_id
         reg_keep = next((r for r in self._regs if r.id == keep), None) if keep else None
-        if reg_keep is not None:
-            self.tree.selection_set(str(reg_keep.id))
-            self.tree.see(str(reg_keep.id))
+        if self._force_siguiente or self._modo_nuevo or reg_keep is None:
+            self._force_siguiente = False
+            self.preparar_siguiente()
+        else:
+            self._select_tree_iid(str(reg_keep.id))
             self._cargar_registro_en_barra(reg_keep)
             self._show_detail(reg_keep)
-        elif activos:
-            ultimo = activos[-1]
-            self.tree.selection_set(str(ultimo.id))
-            self.tree.see(str(ultimo.id))
-            self._cargar_registro_en_barra(ultimo)
-            self._show_detail(ultimo)
+
+    def _select_tree_iid(self, iid: str) -> None:
+        """Selecciona sin reentrar en _on_select (evita bucles al arrancar)."""
+        if not self.tree.exists(iid):
+            return
+        self._ignore_tree_select = True
+        try:
+            self.tree.selection_set(iid)
+            self.tree.see(iid)
+        finally:
+            self._ignore_tree_select = False
+
+    def preparar_siguiente(self) -> None:
+        """
+        Hueco del próximo fardo (p. ej. el 11.º si ya hay 10):
+        copia datos del último, correlativo nuevo, peso en vivo → Bruto/Neto.
+        """
+        self._modo_nuevo = True
+        self._target_id = None
+        self._selected_id = None
+        self._peso_edit = None
+        self.reanudar_medicion()
+
+        activos = [r for r in self._regs if r.activo] if self._regs else []
+        last = activos[-1] if activos else None
+        nro = self.db.siguiente_nro_fardo(dia=self.fecha)
+
+        if last:
+            self.var_cliente.set(last.cliente)
+            self.var_lote.set(last.lote)
+            self.var_color.set(last.color)
+            self.var_dn.set(last.denier)
+            self.var_corte.set(last.corte)
+            self.var_operario.set(last.operario)
+            tc = last.tara_carreta if last.tara_carreta > 0 else TARA_CARRETA_KG
+            tf = last.tara_fardo if last.tara_fardo > 0 else TARA_FARDO_KG
+            self._tara_prep = (tc, tf)
         else:
-            self._selected_id = None
-            self._cargar_registro_en_barra(None)
-            self._show_detail(None)
+            self.var_lote.set("")
+            self._tara_prep = (TARA_CARRETA_KG, TARA_FARDO_KG)
+
+        self.var_nro.set(str(nro))
+        self.var_modo.set(f"▶  SIGUIENTE FARDO  #{nro}  ·  listo para pesar")
+        self.lbl_modo.config(fg=Theme.ST_COLOR)
+        self.var_hint.set(
+            f"Hueco #{nro} · peso en vivo actualiza Bruto/Neto · "
+            f"CAPTURAR → IMPRIMIR / SUBIR (crea el registro)"
+        )
+        self.var_msg.set("")
+        self.refrescar_maestros()
+
+        self._select_tree_iid("__nuevo__")
+        self._show_detail(None)
+        self._actualizar_indicadores_vivos()
 
     def _cargar_registro_en_barra(self, reg: Optional[RegistroPesaje]) -> None:
-        """Carga cualquier registro (o vacío) en la barra de edición."""
+        """Carga un registro existente en modo edición."""
+        self._modo_nuevo = False
         self.reanudar_medicion()
         if reg is None:
-            self._target_id = None
-            self._selected_id = None
-            self._peso_edit = None
-            self.var_nro.set(str(self.db.siguiente_nro_fardo(dia=self.fecha)))
-            self.var_lote.set("")
-            self.var_operario.set("")
-            self.var_hint.set(
-                "Sin registros · complete campos y CAPTURAR → GUARDAR / IMPRIMIR (crea el primero)"
-            )
-            self.refrescar_maestros()
+            self.preparar_siguiente()
             return
 
         self._selected_id = reg.id
@@ -508,6 +616,7 @@ class HojaDiaView(tk.Frame):
             float(reg.tara_carreta) if reg.tara_carreta > 0 else TARA_CARRETA_KG,
             float(reg.tara_fardo) if reg.tara_fardo > 0 else TARA_FARDO_KG,
         )
+        self._tara_prep = (self._peso_edit[3], self._peso_edit[4])
         self.var_nro.set(str(reg.nro_fardo))
         self.var_cliente.set(reg.cliente)
         self.var_lote.set(reg.lote)
@@ -515,15 +624,17 @@ class HojaDiaView(tk.Frame):
         self.var_dn.set(reg.denier)
         self.var_corte.set(reg.corte)
         self.var_operario.set(reg.operario)
-        # Mostrar pesos guardados hasta capturar uno nuevo
         self.var_bruto.set(f"{reg.peso_bruto:.2f}")
         self.var_neto.set(f"{reg.peso_neto:.2f}")
         if reg.peso_total > 0:
             self.var_peso.set(f"{reg.peso_total:.2f} kg")
         estado = "oculto — restaure para editar" if not reg.activo else "edición"
+        self.var_modo.set(f"✎  EDITANDO FARDO  #{reg.nro_fardo}  (ID {reg.id})")
+        self.lbl_modo.config(fg=Theme.US_COLOR)
         self.var_hint.set(
-            f"Editando fardo {reg.nro_fardo} (ID {reg.id}) · {estado} · "
-            f"modifique campos → GUARDAR  |  CAPTURAR peso nuevo → IMPRIMIR"
+            f"Editando fardo {reg.nro_fardo} · {estado} · "
+            f"GUARDAR cambios  |  CAPTURAR peso nuevo → IMPRIMIR  |  "
+            f"«＋ Siguiente fardo» para el hueco nuevo"
         )
         self.refrescar_maestros()
 
@@ -535,10 +646,20 @@ class HojaDiaView(tk.Frame):
             return fecha_hora[11:16] if len(fecha_hora) >= 16 else ""
 
     def _on_select(self, _event=None) -> None:
+        if self._ignore_tree_select:
+            return
         sel = self.tree.selection()
         if not sel:
             return
-        rid = int(sel[0])
+        iid = sel[0]
+        if iid == "__nuevo__":
+            # Ya estamos en el hueco: no reentrar (selection_set dispara este evento).
+            if self._modo_nuevo:
+                self._show_detail(None)
+                return
+            self.preparar_siguiente()
+            return
+        rid = int(iid)
         reg = next((r for r in self._regs if r.id == rid), None)
         if reg is None:
             return
@@ -548,8 +669,17 @@ class HojaDiaView(tk.Frame):
     def _show_detail(self, reg: Optional[RegistroPesaje]) -> None:
         self.detail.configure(state=tk.NORMAL)
         self.detail.delete("1.0", tk.END)
-        if reg is None:
-            self.detail.insert(tk.END, "Sin fardos este día. Use la barra de abajo para el primero.")
+        if self._modo_nuevo or reg is None:
+            nro = self.var_nro.get() or "?"
+            self.detail.insert(
+                tk.END,
+                (
+                    f"SIGUIENTE FARDO #{nro} — hueco listo para la próxima subida\n"
+                    f"Cliente/Lote/Color/Dn/Corte/Op. se copian del último registro.\n"
+                    f"El peso en vivo calcula P.Bruto y P.Neto al instante.\n"
+                    f"CAPTURAR congela el peso → IMPRIMIR / SUBIR crea el fardo #{nro}."
+                ),
+            )
         else:
             sync = "Sincronizado" if reg.estado_sincronizado else "Pendiente de sync"
             estado = "OCULTO (soft-delete)" if not reg.activo else sync
@@ -569,11 +699,19 @@ class HojaDiaView(tk.Frame):
         """Soft-delete del fardo seleccionado (no borra; no libera el Nº)."""
         if self.focus_es_entrada():
             return
+        sel = self.tree.selection()
+        if sel and sel[0] == "__nuevo__":
+            messagebox.showinfo(
+                "Hoja",
+                "Esa fila es el hueco del siguiente fardo (aún no existe).",
+            )
+            return
         rid = self._selected_id
         if rid is None:
-            sel = self.tree.selection()
             if not sel:
                 messagebox.showinfo("Hoja", "Seleccione un fardo en la tabla.")
+                return
+            if sel[0] == "__nuevo__":
                 return
             rid = int(sel[0])
         reg = next((r for r in self._regs if r.id == rid), None)
@@ -601,11 +739,15 @@ class HojaDiaView(tk.Frame):
             self.on_saved()
 
     def restaurar_seleccionado(self) -> None:
+        sel = self.tree.selection()
+        if sel and sel[0] == "__nuevo__":
+            return
         rid = self._selected_id
         if rid is None:
-            sel = self.tree.selection()
             if not sel:
                 messagebox.showinfo("Hoja", "Seleccione un fardo oculto.")
+                return
+            if sel[0] == "__nuevo__":
                 return
             rid = int(sel[0])
         reg = next((r for r in self._regs if r.id == rid), None)
@@ -630,6 +772,8 @@ class HojaDiaView(tk.Frame):
     # --- Pesaje compacto -------------------------------------------------
 
     def _taras_desde_ultimo(self) -> tuple[float, float]:
+        if self._modo_nuevo:
+            return self._tara_prep
         if self._peso_edit is not None:
             return self._peso_edit[3], self._peso_edit[4]
         activos = getattr(self, "_regs_activos", None) or [
@@ -641,6 +785,22 @@ class HojaDiaView(tk.Frame):
             tf = u.tara_fardo if u.tara_fardo > 0 else TARA_FARDO_KG
             return tc, tf
         return TARA_CARRETA_KG, TARA_FARDO_KG
+
+    def _actualizar_indicadores_vivos(self) -> None:
+        """Bruto/Neto desde peso en vivo o foto (modo siguiente / captura)."""
+        if self._frozen and self._foto is not None:
+            total = float(self._foto["weight"])
+        else:
+            data = self.reader.snapshot()
+            if data["weight"] is None:
+                if self._modo_nuevo:
+                    self.var_bruto.set("---.--")
+                    self.var_neto.set("---.--")
+                return
+            total = float(data["weight"])
+        bruto, neto, _, _ = self._calcular_pesos(total)
+        self.var_bruto.set(f"{bruto:.2f}")
+        self.var_neto.set(f"{neto:.2f}")
 
     def _calcular_pesos(self, total: float) -> tuple[float, float, float, float]:
         tc, tf = self._taras_desde_ultimo()
@@ -770,6 +930,7 @@ class HojaDiaView(tk.Frame):
 
     def _despues_carga_masiva(self) -> None:
         self.refrescar_maestros()
+        self._force_siguiente = True
         self.refrescar()
         top = self.winfo_toplevel()
         if hasattr(top, "_on_maestros_change"):
@@ -858,7 +1019,9 @@ class HojaDiaView(tk.Frame):
                 )
                 return
 
-        datos = self._recoger(permitir_peso_guardado=True)
+        # Nuevo fardo: exige captura / peso en vivo. Edición: puede reusar pesos.
+        creando = self._modo_nuevo or self._target_id is None
+        datos = self._recoger(permitir_peso_guardado=not creando)
         if datos is None:
             return
 
@@ -868,10 +1031,9 @@ class HojaDiaView(tk.Frame):
                 self.db.actualizar(target_id, datos)
                 self.var_msg.set(f"Fardo {datos.nro_fardo} guardado (ID {target_id})")
             else:
-                rid = self.db.insertar(datos, fecha_hora=datos.fecha_hora_registro or None)
-                self._selected_id = rid
-                self._target_id = rid
-                self.var_msg.set(f"Fardo {datos.nro_fardo} creado (ID {rid})")
+                self.db.insertar(datos, fecha_hora=datos.fecha_hora_registro or None)
+                self.var_msg.set(f"Fardo {datos.nro_fardo} creado · listo el siguiente")
+                self._force_siguiente = True
         except ValueError as exc:
             messagebox.showwarning("Hoja", str(exc))
             return
@@ -893,8 +1055,9 @@ class HojaDiaView(tk.Frame):
                 )
                 return
 
-        # Si no hay foto nueva, permitir reimprimir con pesos del registro
-        datos = self._recoger(permitir_peso_guardado=True)
+        creando = self._modo_nuevo or self._target_id is None
+        # Nuevo: captura/vivo. Edición sin foto: reimprimir con pesos guardados.
+        datos = self._recoger(permitir_peso_guardado=not creando)
         if datos is None:
             return
 
@@ -926,6 +1089,8 @@ class HojaDiaView(tk.Frame):
             f"Fardo {datos.nro_fardo} {accion} · "
             f"Bruto {datos.peso_bruto:.2f} / Neto {datos.peso_neto:.2f} kg"
         )
+        if accion == "creado":
+            self._force_siguiente = True
         self.reanudar_medicion()
         self.refrescar()
         if self.on_saved:

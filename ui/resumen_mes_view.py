@@ -54,7 +54,9 @@ class ResumenMesView(tk.Frame):
 
         self._rows: list[ResumenDia] = []
         self._fig_canvas = None
+        self._chart_job: Optional[str] = None
         self._build()
+        # KPIs/tabla ya; el gráfico (matplotlib) se dibuja en idle para no congelar el arranque
         self.refrescar()
 
     def _build(self) -> None:
@@ -330,7 +332,13 @@ class ResumenMesView(tk.Frame):
                 lbl.config(fg=color)
 
         self._fill_table()
-        self._draw_chart()
+        # Diferir import/render de matplotlib: bloquea el hilo de Tk al iniciar
+        if self._chart_job is not None:
+            try:
+                self.after_cancel(self._chart_job)
+            except tk.TclError:
+                pass
+        self._chart_job = self.after(50, self._draw_chart)
 
     def _fill_table(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -351,16 +359,18 @@ class ResumenMesView(tk.Frame):
             )
 
     def _draw_chart(self) -> None:
+        self._chart_job = None
         for w in self.chart_host.winfo_children():
             w.destroy()
         self._fig_canvas = None
 
         try:
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-            from matplotlib.figure import Figure
             import matplotlib
 
-            matplotlib.use("Agg")
+            # Debe fijarse ANTES de importar backends/figure
+            matplotlib.use("TkAgg")
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            from matplotlib.figure import Figure
         except ImportError:
             tk.Label(
                 self.chart_host,

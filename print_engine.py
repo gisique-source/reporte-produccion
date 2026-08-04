@@ -8,12 +8,14 @@ sin rótulos de atributos ni datos de empresa — van en la etiqueta preimpresa)
 from __future__ import annotations
 
 import io
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageWin
 
 from config import PAGE_HEIGHT_MM, PAGE_WIDTH_MM
-from label_layout import FieldLayout, LabelLayout, get_layout, load_layout
+from label_layout import LabelLayout, get_layout
 
 if TYPE_CHECKING:
     from models import DatosEtiqueta
@@ -38,9 +40,26 @@ PRINT_DPI = 300
 PAGE_W_PX = 2480
 PAGE_H_PX = 3508
 
+# font_size del layout está en puntos tipográficos (como en Word/el editor).
+# Pillow pide píxeles: px = pt * dpi / 72.
+_FONT_FILES: dict[str, tuple[str, str]] = {
+    # clave normalizada → (regular, bold)
+    "arial": ("arial.ttf", "arialbd.ttf"),
+    "calibri": ("calibri.ttf", "calibrib.ttf"),
+    "tahoma": ("tahoma.ttf", "tahomabd.ttf"),
+    "verdana": ("verdana.ttf", "verdanab.ttf"),
+    "segoeui": ("segoeui.ttf", "segoeuib.ttf"),
+    "consolas": ("consola.ttf", "consolab.ttf"),
+}
+
 
 def _mm_to_px(mm: float, dpi: int = PRINT_DPI) -> int:
     return int(round(mm * dpi / 25.4))
+
+
+def _pt_to_px(points: float, dpi: int = PRINT_DPI) -> int:
+    """Convierte puntos tipográficos a píxeles según el DPI del render."""
+    return max(8, int(round(float(points) * dpi / 72.0)))
 
 
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -53,44 +72,46 @@ def _hex_to_rgb(color: str) -> tuple[int, int, int]:
         return 0, 0, 0
 
 
+def _fonts_dirs() -> list[Path]:
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    dirs = [Path(windir) / "Fonts"]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        dirs.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
+    return dirs
+
+
 def _font(
-    size: int,
+    size_pt: int,
     *,
     bold: bool = False,
     font_name: str = "Arial",
+    dpi: int = PRINT_DPI,
 ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    base = (font_name or "Arial").replace(" ", "")
+    """Carga TTF desde Windows\\Fonts. size_pt = puntos del editor/layout."""
+    size_px = _pt_to_px(size_pt, dpi)
+    key = (font_name or "Arial").replace(" ", "").lower()
+    regular, bold_file = _FONT_FILES.get(key, (f"{key}.ttf", f"{key}bd.ttf"))
+    names = [bold_file, regular] if bold else [regular, bold_file]
+    # Fallbacks seguros
+    names.extend(["arialbd.ttf", "arial.ttf"] if bold else ["arial.ttf", "arialbd.ttf"])
+
     candidates: list[str] = []
-    if bold:
-        candidates.extend(
-            [
-                f"{base}bd.ttf",
-                f"{base}b.ttf",
-                f"{base}-Bold.ttf",
-                "arialbd.ttf",
-                "arial.ttf",
-            ]
-        )
-    else:
-        candidates.extend([f"{base}.ttf", "arial.ttf", "arialbd.ttf"])
-    # Nombres comunes Windows
-    if base.lower() == "arial":
-        candidates = (
-            ["arialbd.ttf", "arial.ttf"] if bold else ["arial.ttf", "arialbd.ttf"]
-        ) + candidates
-    elif base.lower() == "calibri":
-        candidates = (
-            ["calibrib.ttf", "calibri.ttf"] if bold else ["calibri.ttf", "calibrib.ttf"]
-        ) + candidates
-    elif base.lower() == "tahoma":
-        candidates = (
-            ["tahomabd.ttf", "tahoma.ttf"] if bold else ["tahoma.ttf", "tahomabd.ttf"]
-        ) + candidates
-    for name in candidates:
+    for name in names:
+        candidates.append(name)
+        for folder in _fonts_dirs():
+            candidates.append(str(folder / name))
+
+    seen: set[str] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
         try:
-            return ImageFont.truetype(name, size)
+            return ImageFont.truetype(path, size_px)
         except OSError:
             continue
+    # Último recurso: bitmap minúsculo (solo si no hay ninguna TTF)
     return ImageFont.load_default()
 
 
@@ -99,7 +120,12 @@ def _render_barcode(payload: str, max_width: int, height: int) -> Image.Image:
     if Code128 is None or ImageWriter is None:
         img = Image.new("RGB", (max_width, height), "white")
         draw = ImageDraw.Draw(img)
-        draw.text((8, max(0, height // 3)), text, fill="black", font=_font(18))
+        draw.text(
+            (8, max(0, height // 3)),
+            text,
+            fill="black",
+            font=_font(14, dpi=PRINT_DPI),
+        )
         return img
 
     buf = io.BytesIO()
@@ -199,7 +225,12 @@ def render_etiqueta_region(
         value = _valor_campo(datos, fld.id)
         if not value:
             continue
-        font = _font(fld.font_size, bold=fld.bold, font_name=fld.font_name)
+        font = _font(
+            fld.font_size,
+            bold=fld.bold,
+            font_name=fld.font_name,
+            dpi=dpi,
+        )
         # Ajuste vertical centrado aproximado
         bbox = draw.textbbox((0, 0), value, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
@@ -210,6 +241,7 @@ def render_etiqueta_region(
         else:
             tx = x + 2
         ty = y + max((bh - th) // 2, 0)
+        # fill= color RGB del layout (hex del editor)
         draw.text((tx, ty), value, font=font, fill=fill)
 
     return img
@@ -220,7 +252,7 @@ def render_etiqueta_a4(
     layout: Optional[LabelLayout] = None,
 ) -> Image.Image:
     """Página A4 2480×3508 (300 DPI) con la etiqueta en el origen configurado."""
-    layout = layout or load_layout()
+    layout = layout or get_layout()
     page = Image.new("RGB", (PAGE_W_PX, PAGE_H_PX), "white")
     label = render_etiqueta_region(datos, layout, dpi=PRINT_DPI, bg="white", show_guides=False)
     ox = _mm_to_px(layout.origin_x_mm)

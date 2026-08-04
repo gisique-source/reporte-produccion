@@ -21,6 +21,7 @@ from label_layout import (
     default_layout,
     load_layout,
     save_layout,
+    set_active_layout,
 )
 from models import DatosEtiqueta
 from print_engine import render_etiqueta_region
@@ -84,6 +85,7 @@ class EtiquetaEditorView(tk.Frame):
         )
 
         self._build()
+        set_active_layout(self.layout)
         self._refresh_canvas()
 
     def _build(self) -> None:
@@ -305,6 +307,7 @@ class EtiquetaEditorView(tk.Frame):
         fld.align = self.var_align.get() or "left"
         fld.visible = bool(self.var_visible.get())
         fld.clamp(self.layout.label_width_mm, self.layout.label_height_mm)
+        set_active_layout(self.layout)
         self._dirty = True
         self._select_field(fld.id)
         self._refresh_canvas()
@@ -453,6 +456,7 @@ class EtiquetaEditorView(tk.Frame):
             fld.w_mm = self._field_start.w_mm + dx
             fld.h_mm = self._field_start.h_mm + dy
         fld.clamp(self.layout.label_width_mm, self.layout.label_height_mm)
+        set_active_layout(self.layout)
         self._dirty = True
         self._select_field(fld.id)
         self._refresh_canvas()
@@ -460,6 +464,8 @@ class EtiquetaEditorView(tk.Frame):
     def _on_up(self, _event=None) -> None:
         self._drag_mode = None
         self._field_start = None
+        if self._dirty:
+            set_active_layout(self.layout)
 
     def _guardar(self) -> None:
         self._apply_props()
@@ -476,6 +482,7 @@ class EtiquetaEditorView(tk.Frame):
         self.layout = default_layout()
         self.var_ox.set(f"{self.layout.origin_x_mm:.1f}")
         self.var_oy.set(f"{self.layout.origin_y_mm:.1f}")
+        set_active_layout(self.layout)
         self._select_field(self._selected or "color")
         self._dirty = True
         self._refresh_canvas()

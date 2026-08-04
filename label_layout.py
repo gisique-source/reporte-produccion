@@ -190,6 +190,12 @@ def save_layout(layout: LabelLayout, path: str = LAYOUT_PATH) -> None:
     _cached = layout
 
 
+def set_active_layout(layout: LabelLayout) -> None:
+    """Actualiza el layout en memoria (impresión inmediata sin Guardar)."""
+    global _cached
+    _cached = layout
+
+
 def get_layout() -> LabelLayout:
     return load_layout() if _cached is None else _cached
 
