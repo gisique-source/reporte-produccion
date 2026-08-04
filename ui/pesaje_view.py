@@ -324,7 +324,8 @@ class PesajeView(tk.Frame):
         self.cb_dn.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         self.cb_corte = combo_entry(form, self.var_corte, width=10)
         self.cb_corte.grid(row=3, column=1, sticky="ew", padx=(10, 0), pady=(0, 8))
-        text_entry(form, self.var_operario, 14).grid(
+        self.cb_operario = combo_entry(form, self.var_operario, width=14)
+        self.cb_operario.grid(
             row=3, column=2, sticky="ew", padx=(10, 0), pady=(0, 8)
         )
 
@@ -380,6 +381,7 @@ class PesajeView(tk.Frame):
             self.cb_color,
             self.cb_dn,
             self.cb_corte,
+            self.cb_operario,
             self.ent_tara_carreta,
             self.ent_tara_fardo,
         ):
@@ -453,6 +455,7 @@ class PesajeView(tk.Frame):
             (self.cb_color, self.var_color, "color"),
             (self.cb_dn, self.var_dn, "denier"),
             (self.cb_corte, self.var_corte, "corte"),
+            (self.cb_operario, self.var_operario, "operario"),
         )
         for cb, var, tipo in pairs:
             valores = cat.valores_activos(tipo)  # type: ignore[arg-type]

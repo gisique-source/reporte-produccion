@@ -1,4 +1,4 @@
-"""Administración de tablas maestro (cliente, color, denier, corte)."""
+"""Administración de tablas maestro (cliente, color, denier, corte, operario)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from ui.widgets import Theme, secondary_button, text_entry
 class MaestrosView(tk.Frame):
     """Alta / edición / desactivación. Sin borrado físico."""
 
-    TIPOS: tuple[MaestroTipo, ...] = ("cliente", "color", "denier", "corte")
+    TIPOS: tuple[MaestroTipo, ...] = ("cliente", "color", "denier", "corte", "operario")
 
     def __init__(
         self,
@@ -60,7 +60,7 @@ class MaestrosView(tk.Frame):
         body.rowconfigure(0, weight=1)
 
         # --- Navegación lateral ---
-        side = tk.Frame(body, bg=Theme.PANEL, width=200)
+        side = tk.Frame(body, bg=Theme.PANEL, width=210)
         side.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
         side.grid_propagate(False)
 
@@ -147,6 +147,12 @@ class MaestrosView(tk.Frame):
         secondary_button(btns, "Nuevo / Guardar", self._guardar).pack(side=tk.LEFT, padx=4)
         secondary_button(btns, "Desactivar", self._desactivar).pack(side=tk.LEFT, padx=4)
         secondary_button(btns, "Reactivar", self._reactivar).pack(side=tk.LEFT, padx=4)
+        secondary_button(btns, "Fusionar selección", self._fusionar_seleccion).pack(
+            side=tk.LEFT, padx=4
+        )
+        secondary_button(btns, "Fusionar similares (Aa)", self._fusionar_similares).pack(
+            side=tk.LEFT, padx=4
+        )
         secondary_button(btns, "Limpiar", self._limpiar).pack(side=tk.LEFT, padx=4)
 
         wrap = tk.Frame(right, bg=Theme.BG)
@@ -172,6 +178,7 @@ class MaestrosView(tk.Frame):
             columns=("id", "valor", "codigo", "estado"),
             show="headings",
             style="Mae.Treeview",
+            selectmode="extended",
         )
         self.tree.heading("id", text="ID")
         self.tree.heading("valor", text="Valor")
@@ -182,6 +189,7 @@ class MaestrosView(tk.Frame):
         self.tree.column("codigo", width=100, anchor="center")
         self.tree.column("estado", width=90, anchor="center")
         self.tree.tag_configure("inactivo", foreground="#888")
+        self.tree.tag_configure("dup", foreground="#f1c40f")
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         sy = ttk.Scrollbar(wrap, orient=tk.VERTICAL, command=self.tree.yview)
@@ -208,10 +216,23 @@ class MaestrosView(tk.Frame):
     def refrescar(self) -> None:
         solo_activos = not self.var_filtro.get()
         self._items = self.catalogo.listar(self.tipo, solo_activos=solo_activos)
+        dup_ids: set[int] = set()
+        for grupo in self.catalogo.grupos_duplicados(self.tipo, solo_activos=solo_activos):
+            for m in grupo:
+                dup_ids.add(m.id)
+
         self.tree.delete(*self.tree.get_children())
         for m in self._items:
             estado = "Activo" if m.activo else "Inactivo"
-            tags = () if m.activo else ("inactivo",)
+            if m.id in dup_ids and m.activo:
+                estado = "Duplicado?"
+            tags: tuple[str, ...]
+            if not m.activo:
+                tags = ("inactivo",)
+            elif m.id in dup_ids:
+                tags = ("dup",)
+            else:
+                tags = ()
             self.tree.insert(
                 "",
                 tk.END,
@@ -219,11 +240,20 @@ class MaestrosView(tk.Frame):
                 values=(m.id, m.valor, m.codigo, estado),
                 tags=tags,
             )
+        n_dup = len(self.catalogo.grupos_duplicados(self.tipo, solo_activos=True))
+        if n_dup:
+            self.lbl_msg.config(
+                text=f"{n_dup} grupo(s) con nombres similares (Aa) — use Fusionar",
+                fg=Theme.US_COLOR,
+            )
+        else:
+            self.lbl_msg.config(text="", fg=Theme.MUTED)
 
     def _on_select(self, _event=None) -> None:
         sel = self.tree.selection()
         if not sel:
             return
+        # El primero seleccionado es el canónico / formulario
         mid = int(sel[0])
         item = next((m for m in self._items if m.id == mid), None)
         if not item:
@@ -286,6 +316,76 @@ class MaestrosView(tk.Frame):
         except CatalogoError as exc:
             messagebox.showwarning("Maestros", str(exc))
             return
+        self._limpiar()
+        self.refrescar()
+        if self.on_change:
+            self.on_change()
+
+    def _fusionar_seleccion(self) -> None:
+        """Fusiona filas seleccionadas en la primera (canónica). Ej: Asencios + asencios."""
+        sel = self.tree.selection()
+        if len(sel) < 2:
+            messagebox.showinfo(
+                "Fusionar",
+                "Seleccione 2 o más filas (Ctrl+clic).\n"
+                "La primera queda como nombre canónico; las demás se colapsan.",
+            )
+            return
+        ids = [int(x) for x in sel]
+        canon_id = ids[0]
+        otros = ids[1:]
+        canon = next((m for m in self._items if m.id == canon_id), None)
+        otros_vals = [m.valor for m in self._items if m.id in otros]
+        if not messagebox.askyesno(
+            "Fusionar selección",
+            f"¿Colapsar en «{canon.valor if canon else canon_id}»?\n\n"
+            f"Duplicados: {', '.join(otros_vals)}\n\n"
+            "Se actualizará el historial de pesajes y se desactivarán los duplicados.",
+        ):
+            return
+        try:
+            valor, n = self.catalogo.fusionar(self.tipo, canon_id, otros)
+        except CatalogoError as exc:
+            messagebox.showwarning("Maestros", str(exc))
+            return
+        self.lbl_msg.config(
+            text=f"Fusionados {n} → «{valor}»", fg=Theme.ST_COLOR
+        )
+        self._limpiar()
+        self.refrescar()
+        if self.on_change:
+            self.on_change()
+
+    def _fusionar_similares(self) -> None:
+        """Detecta y fusiona automáticamente Asencios / asencios / etc."""
+        grupos = self.catalogo.grupos_duplicados(self.tipo, solo_activos=True)
+        if not grupos:
+            messagebox.showinfo(
+                "Fusionar similares",
+                "No hay nombres similares (mismo texto ignorando mayúsculas/espacios).",
+            )
+            return
+        detalle = []
+        for g in grupos:
+            detalle.append(" / ".join(f"«{m.valor}»" for m in g))
+        if not messagebox.askyesno(
+            "Fusionar similares",
+            f"Se encontraron {len(grupos)} grupo(s):\n\n"
+            + "\n".join(f"· {d}" for d in detalle[:12])
+            + ("\n…" if len(detalle) > 12 else "")
+            + "\n\n¿Fusionar cada grupo en un solo valor?",
+        ):
+            return
+        try:
+            res = self.catalogo.fusionar_similares(self.tipo)
+        except CatalogoError as exc:
+            messagebox.showwarning("Maestros", str(exc))
+            return
+        total = sum(n for _, n in res)
+        self.lbl_msg.config(
+            text=f"Fusionados {total} duplicado(s) en {len(res)} grupo(s)",
+            fg=Theme.ST_COLOR,
+        )
         self._limpiar()
         self.refrescar()
         if self.on_change:

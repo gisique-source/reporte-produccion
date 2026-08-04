@@ -58,6 +58,7 @@ _MAESTRO_KEYS: dict[str, MaestroTipo] = {
     "color": "color",
     "dn": "denier",
     "corte": "corte",
+    "operario": "operario",
 }
 
 
@@ -201,6 +202,7 @@ class FilaImport:
     color_ok: Optional[str] = None
     dn_ok: Optional[str] = None
     corte_ok: Optional[str] = None
+    operario_ok: Optional[str] = None
     errores: list[str] = field(default_factory=list)
 
     @property
@@ -212,6 +214,7 @@ class FilaImport:
                 (self.color_ok, self.color),
                 (self.dn_ok, self.dn),
                 (self.corte_ok, self.corte),
+                (self.operario_ok, self.operario),
             )
         )
 
@@ -253,6 +256,7 @@ def parsear_pegado(
         "color": catalogo.valores_activos("color"),
         "dn": catalogo.valores_activos("denier"),
         "corte": catalogo.valores_activos("corte"),
+        "operario": catalogo.valores_activos("operario"),
     }
 
     filas: list[FilaImport] = []
@@ -284,11 +288,13 @@ def parsear_pegado(
         col_raw = get("color")
         dn_raw = get("dn")
         corte_raw = get("corte")
+        op_raw = get("operario")
 
         cli_ok, cli_prop = resolver_maestro(cli_raw, cats["cliente"])
         col_ok, col_prop = resolver_maestro(col_raw, cats["color"])
         dn_ok, dn_prop = resolver_maestro(dn_raw, cats["dn"])
         corte_ok, corte_prop = resolver_maestro(corte_raw, cats["corte"])
+        op_ok, op_prop = resolver_maestro(op_raw, cats["operario"])
 
         errores: list[str] = []
         if not fardo:
@@ -302,7 +308,7 @@ def parsear_pegado(
                 color=col_prop or col_raw,
                 dn=dn_prop or dn_raw,
                 corte=corte_prop or corte_raw,
-                operario=re.sub(r"\s+", " ", get("operario")).strip(),
+                operario=op_prop or op_raw,
                 peso_total=total,
                 tara_carreta=tc,
                 tara_fardo=tf,
@@ -313,6 +319,7 @@ def parsear_pegado(
                 color_ok=col_ok,
                 dn_ok=dn_ok,
                 corte_ok=corte_ok,
+                operario_ok=op_ok,
                 errores=errores,
             )
         )
@@ -327,6 +334,7 @@ def maestros_faltantes(filas: list[FilaImport]) -> dict[MaestroTipo, list[str]]:
         "color": [],
         "denier": [],
         "corte": [],
+        "operario": [],
     }
     seen: dict[MaestroTipo, set[str]] = {k: set() for k in faltantes}
 
@@ -336,6 +344,7 @@ def maestros_faltantes(filas: list[FilaImport]) -> dict[MaestroTipo, list[str]]:
             ("color", f.color_ok, f.color),
             ("denier", f.dn_ok, f.dn),
             ("corte", f.corte_ok, f.corte),
+            ("operario", f.operario_ok, f.operario),
         )
         for tipo, ok, raw in pares:
             if ok is None and raw:
@@ -367,6 +376,7 @@ def crear_maestros_faltantes(
         "color": catalogo.valores_activos("color"),
         "dn": catalogo.valores_activos("denier"),
         "corte": catalogo.valores_activos("corte"),
+        "operario": catalogo.valores_activos("operario"),
     }
     for f in filas:
         if f.cliente_ok is None and f.cliente:
@@ -385,6 +395,10 @@ def crear_maestros_faltantes(
             f.corte_ok, _ = resolver_maestro(f.corte, cats["corte"])
             if f.corte_ok:
                 f.corte = f.corte_ok
+        if f.operario_ok is None and f.operario:
+            f.operario_ok, _ = resolver_maestro(f.operario, cats["operario"])
+            if f.operario_ok:
+                f.operario = f.operario_ok
     return creados
 
 
@@ -419,7 +433,7 @@ def fila_a_datos(fila: FilaImport, dia: date) -> DatosEtiqueta:
         fecha=format_fecha_editable(dia),
         peso_bruto=fila.peso_bruto,
         peso_neto=fila.peso_neto,
-        operario=fila.operario,
+        operario=fila.operario_ok or fila.operario,
         peso_total=fila.peso_total,
         tara_carreta=fila.tara_carreta,
         tara_fardo=fila.tara_fardo,

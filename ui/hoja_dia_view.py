@@ -71,12 +71,17 @@ class HojaDiaView(tk.Frame):
         self.var_corte = tk.StringVar()
         self.var_operario = tk.StringVar()
         self.var_ir_fecha = tk.StringVar(value=format_fecha_editable(date.today()))
+        self.var_mostrar_ocultos = tk.BooleanVar(value=False)
 
         self._regs: list[RegistroPesaje] = []
+        self._regs_activos: list[RegistroPesaje] = []
+        self._selected_id: Optional[int] = None
+        self._target_id: Optional[int] = None
+        self._peso_edit: Optional[tuple[float, float, float, float, float]] = None
+        # (total, bruto, neto, tara_c, tara_f) del registro en edición
         self._frozen = False
         self._foto: Optional[dict] = None
         self._printing = False
-        self._target_id: Optional[int] = None  # último registro a actualizar
 
         self._build()
         self.refrescar_maestros()
@@ -133,6 +138,26 @@ class HojaDiaView(tk.Frame):
         wrap = tk.Frame(self, bg=Theme.BG)
         wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
 
+        tools = tk.Frame(wrap, bg=Theme.BG)
+        tools.pack(fill=tk.X, pady=(0, 4))
+        tk.Checkbutton(
+            tools,
+            text="Mostrar ocultos",
+            variable=self.var_mostrar_ocultos,
+            command=self.refrescar,
+            fg=Theme.FG,
+            bg=Theme.BG,
+            selectcolor=Theme.PANEL,
+            activebackground=Theme.BG,
+            activeforeground=Theme.FG,
+        ).pack(side=tk.LEFT)
+        secondary_button(tools, "Ocultar seleccionado", self.ocultar_seleccionado).pack(
+            side=tk.RIGHT, padx=(6, 0)
+        )
+        secondary_button(tools, "Restaurar seleccionado", self.restaurar_seleccionado).pack(
+            side=tk.RIGHT
+        )
+
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(
@@ -165,7 +190,9 @@ class HojaDiaView(tk.Frame):
 
         self.tree.tag_configure("bruto", foreground="#e74c3c")
         self.tree.tag_configure("ultimo", background="#1e3a5f")
+        self.tree.tag_configure("oculto", foreground="#888888")
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.bind("<Delete>", lambda _e: self.ocultar_seleccionado())
         # Ctrl+V en la hoja (fuera de Entry) abre carga masiva
         self.bind_all("<Control-v>", self._on_ctrl_v, add="+")
         self.bind_all("<Control-V>", self._on_ctrl_v, add="+")
@@ -262,9 +289,8 @@ class HojaDiaView(tk.Frame):
         self.cb_corte.pack()
 
         col = _lab_col(mid, "Op.")
-        ent = text_entry(col, self.var_operario, 8)
-        ent.configure(font=("Segoe UI", 10))
-        ent.pack()
+        self.cb_operario = combo_entry(col, self.var_operario, width=8)
+        self.cb_operario.pack()
 
         # Botones a la derecha
         right = tk.Frame(bar, bg=Theme.PANEL)
@@ -285,6 +311,22 @@ class HojaDiaView(tk.Frame):
             command=self.tomar_foto,
         )
         self.btn_foto.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.btn_guardar = tk.Button(
+            right,
+            text="GUARDAR",
+            font=("Segoe UI", 12, "bold"),
+            fg="#ffffff",
+            bg="#6c5ce7",
+            activeforeground="#ffffff",
+            activebackground="#7d6ff0",
+            relief=tk.FLAT,
+            padx=16,
+            pady=10,
+            cursor="hand2",
+            command=self.guardar,
+        )
+        self.btn_guardar.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_print = tk.Button(
             right,
@@ -354,6 +396,7 @@ class HojaDiaView(tk.Frame):
             (self.cb_color, self.var_color, "color"),
             (self.cb_dn, self.var_dn, "denier"),
             (self.cb_corte, self.var_corte, "corte"),
+            (self.cb_operario, self.var_operario, "operario"),
         )
         for cb, var, tipo in pairs:
             valores = list(cat.valores_activos(tipo))  # type: ignore[arg-type]
@@ -371,16 +414,27 @@ class HojaDiaView(tk.Frame):
     def refrescar(self) -> None:
         self.var_fecha.set(format_fecha_corta(self.fecha))
         self.var_ir_fecha.set(format_fecha_editable(self.fecha))
-        self._regs = self.db.por_fecha(self.fecha)
+        self._regs = self.db.por_fecha(
+            self.fecha, incluir_ocultos=self.var_mostrar_ocultos.get()
+        )
         self.tree.delete(*self.tree.get_children())
 
+        activos = [r for r in self._regs if r.activo]
         bruto_t = 0.0
         neto_t = 0.0
         for r in self._regs:
-            bruto_t += r.peso_bruto
-            neto_t += r.peso_neto
+            if r.activo:
+                bruto_t += r.peso_bruto
+                neto_t += r.peso_neto
             hora = self._hora(r.fecha_hora)
-            tags = ("ultimo",) if r is self._regs[-1] else ()
+            tags: tuple[str, ...]
+            if not r.activo:
+                tags = ("oculto",)
+            elif activos and r.id == activos[-1].id:
+                tags = ("ultimo",)
+            else:
+                tags = ()
+            estado = "oculto" if not r.activo else ("✓" if r.estado_sincronizado else "…")
             self.tree.insert(
                 "",
                 tk.END,
@@ -399,44 +453,77 @@ class HojaDiaView(tk.Frame):
                     f"{r.peso_neto:.2f}",
                     hora,
                     r.operario,
-                    "✓" if r.estado_sincronizado else "…",
+                    estado,
                 ),
                 tags=tags,
             )
 
         self.var_totales.set(
-            f"Total del día · {len(self._regs)} fardos · "
+            f"Total del día · {len(activos)} fardos · "
             f"Bruto {bruto_t:,.1f} Kgrs · Neto {neto_t:,.1f} Kgrs"
         )
-        self._cargar_ultimo_en_barra()
-        self._show_detail(self._regs[-1] if self._regs else None)
-        if self._regs:
-            self.tree.selection_set(str(self._regs[-1].id))
-            self.tree.see(str(self._regs[-1].id))
+        self._regs_activos = activos
 
-    def _cargar_ultimo_en_barra(self) -> None:
-        """Precarga la barra con el último registro del día (o vacío)."""
-        if not self._regs:
+        # Conservar selección al refrescar; si no, último activo
+        keep = self._selected_id
+        reg_keep = next((r for r in self._regs if r.id == keep), None) if keep else None
+        if reg_keep is not None:
+            self.tree.selection_set(str(reg_keep.id))
+            self.tree.see(str(reg_keep.id))
+            self._cargar_registro_en_barra(reg_keep)
+            self._show_detail(reg_keep)
+        elif activos:
+            ultimo = activos[-1]
+            self.tree.selection_set(str(ultimo.id))
+            self.tree.see(str(ultimo.id))
+            self._cargar_registro_en_barra(ultimo)
+            self._show_detail(ultimo)
+        else:
+            self._selected_id = None
+            self._cargar_registro_en_barra(None)
+            self._show_detail(None)
+
+    def _cargar_registro_en_barra(self, reg: Optional[RegistroPesaje]) -> None:
+        """Carga cualquier registro (o vacío) en la barra de edición."""
+        self.reanudar_medicion()
+        if reg is None:
             self._target_id = None
+            self._selected_id = None
+            self._peso_edit = None
             self.var_nro.set(str(self.db.siguiente_nro_fardo(dia=self.fecha)))
+            self.var_lote.set("")
+            self.var_operario.set("")
             self.var_hint.set(
-                "Sin registros este día · complete campos y CAPTURAR → IMPRIMIR (crea el primero)"
+                "Sin registros · complete campos y CAPTURAR → GUARDAR / IMPRIMIR (crea el primero)"
             )
             self.refrescar_maestros()
             return
 
-        ultimo = self._regs[-1]
-        self._target_id = ultimo.id
-        self.var_nro.set(str(ultimo.nro_fardo))
-        self.var_cliente.set(ultimo.cliente)
-        self.var_lote.set(ultimo.lote)
-        self.var_color.set(ultimo.color)
-        self.var_dn.set(ultimo.denier)
-        self.var_corte.set(ultimo.corte)
-        self.var_operario.set(ultimo.operario)
+        self._selected_id = reg.id
+        self._target_id = reg.id if reg.activo else None
+        self._peso_edit = (
+            float(reg.peso_total),
+            float(reg.peso_bruto),
+            float(reg.peso_neto),
+            float(reg.tara_carreta) if reg.tara_carreta > 0 else TARA_CARRETA_KG,
+            float(reg.tara_fardo) if reg.tara_fardo > 0 else TARA_FARDO_KG,
+        )
+        self.var_nro.set(str(reg.nro_fardo))
+        self.var_cliente.set(reg.cliente)
+        self.var_lote.set(reg.lote)
+        self.var_color.set(reg.color)
+        self.var_dn.set(reg.denier)
+        self.var_corte.set(reg.corte)
+        self.var_operario.set(reg.operario)
+        # Mostrar pesos guardados hasta capturar uno nuevo
+        self.var_bruto.set(f"{reg.peso_bruto:.2f}")
+        self.var_neto.set(f"{reg.peso_neto:.2f}")
+        if reg.peso_total > 0:
+            self.var_peso.set(f"{reg.peso_total:.2f} kg")
+        estado = "oculto — restaure para editar" if not reg.activo else "edición"
         self.var_hint.set(
-            f"Actualiza fardo {ultimo.nro_fardo} (último del día) · "
-            f"CAPTURAR peso → IMPRIMIR etiqueta y guardar"
+            f"Editando fardo {reg.nro_fardo} (ID {reg.id}) · {estado} · "
+            f"modifique campos → GUARDAR  |  CAPTURAR peso nuevo → IMPRIMIR"
         )
         self.refrescar_maestros()
 
@@ -453,6 +540,9 @@ class HojaDiaView(tk.Frame):
             return
         rid = int(sel[0])
         reg = next((r for r in self._regs if r.id == rid), None)
+        if reg is None:
+            return
+        self._cargar_registro_en_barra(reg)
         self._show_detail(reg)
 
     def _show_detail(self, reg: Optional[RegistroPesaje]) -> None:
@@ -462,10 +552,11 @@ class HojaDiaView(tk.Frame):
             self.detail.insert(tk.END, "Sin fardos este día. Use la barra de abajo para el primero.")
         else:
             sync = "Sincronizado" if reg.estado_sincronizado else "Pendiente de sync"
+            estado = "OCULTO (soft-delete)" if not reg.activo else sync
             self.detail.insert(
                 tk.END,
                 (
-                    f"ID {reg.id}  |  Fardo {reg.nro_fardo}  |  {reg.fecha_hora}  |  {sync}\n"
+                    f"ID {reg.id}  |  Fardo {reg.nro_fardo}  |  {reg.fecha_hora}  |  {estado}\n"
                     f"Cliente: {reg.cliente}   Lote: {reg.lote}   Color: {reg.color}\n"
                     f"Dn: {reg.denier}   Corte: {reg.corte} mm   Operario: {reg.operario}\n"
                     f"P.Total {reg.peso_total:.2f}  −  Tara Carreta {reg.tara_carreta:.2f}  "
@@ -474,11 +565,78 @@ class HojaDiaView(tk.Frame):
             )
         self.detail.configure(state=tk.DISABLED)
 
+    def ocultar_seleccionado(self) -> None:
+        """Soft-delete del fardo seleccionado (no borra; no libera el Nº)."""
+        if self.focus_es_entrada():
+            return
+        rid = self._selected_id
+        if rid is None:
+            sel = self.tree.selection()
+            if not sel:
+                messagebox.showinfo("Hoja", "Seleccione un fardo en la tabla.")
+                return
+            rid = int(sel[0])
+        reg = next((r for r in self._regs if r.id == rid), None)
+        if reg is None:
+            messagebox.showinfo("Hoja", "Seleccione un fardo en la tabla.")
+            return
+        if not reg.activo:
+            messagebox.showinfo("Hoja", "Ese fardo ya está oculto.")
+            return
+        if not messagebox.askyesno(
+            "Ocultar fardo",
+            f"¿Ocultar fardo {reg.nro_fardo} (ID {reg.id})?\n\n"
+            "No se elimina de la base. El Nº de fardo no se reutiliza.\n"
+            "Puede restaurarlo con «Mostrar ocultos» → Restaurar.",
+        ):
+            return
+        try:
+            self.db.ocultar(rid)
+        except ValueError as exc:
+            messagebox.showwarning("Hoja", str(exc))
+            return
+        self.var_msg.set(f"Fardo {reg.nro_fardo} oculto (soft-delete)")
+        self.refrescar()
+        if self.on_saved:
+            self.on_saved()
+
+    def restaurar_seleccionado(self) -> None:
+        rid = self._selected_id
+        if rid is None:
+            sel = self.tree.selection()
+            if not sel:
+                messagebox.showinfo("Hoja", "Seleccione un fardo oculto.")
+                return
+            rid = int(sel[0])
+        reg = next((r for r in self._regs if r.id == rid), None)
+        if reg is None:
+            messagebox.showinfo("Hoja", "Seleccione un fardo oculto.")
+            return
+        if reg.activo:
+            messagebox.showinfo(
+                "Hoja", "Ese fardo está activo. Active «Mostrar ocultos» para ver ocultos."
+            )
+            return
+        try:
+            self.db.restaurar(rid)
+        except ValueError as exc:
+            messagebox.showwarning("Hoja", str(exc))
+            return
+        self.var_msg.set(f"Fardo {reg.nro_fardo} restaurado")
+        self.refrescar()
+        if self.on_saved:
+            self.on_saved()
+
     # --- Pesaje compacto -------------------------------------------------
 
     def _taras_desde_ultimo(self) -> tuple[float, float]:
-        if self._regs:
-            u = self._regs[-1]
+        if self._peso_edit is not None:
+            return self._peso_edit[3], self._peso_edit[4]
+        activos = getattr(self, "_regs_activos", None) or [
+            r for r in self._regs if r.activo
+        ]
+        if activos:
+            u = activos[-1]
             tc = u.tara_carreta if u.tara_carreta > 0 else TARA_CARRETA_KG
             tf = u.tara_fardo if u.tara_fardo > 0 else TARA_FARDO_KG
             return tc, tf
@@ -619,18 +777,30 @@ class HojaDiaView(tk.Frame):
         if self.on_saved:
             self.on_saved()
 
-    def _recoger(self) -> Optional[DatosEtiqueta]:
-        total = self._peso_actual()
-        if total is None:
-            self.var_msg.set("Sin peso. Pulse CAPTURAR primero.")
-            return None
-        if not self._frozen:
-            # Auto-captura al imprimir si aún no hay foto
-            if not self.tomar_foto():
+    def _recoger(self, *, permitir_peso_guardado: bool = False) -> Optional[DatosEtiqueta]:
+        total: Optional[float] = None
+        bruto = neto = tc = tf = 0.0
+
+        if self._frozen and self._foto is not None:
+            total = float(self._foto["weight"])
+            bruto, neto, tc, tf = self._calcular_pesos(total)
+        elif permitir_peso_guardado and self._peso_edit is not None:
+            total, bruto, neto, tc, tf = self._peso_edit
+        else:
+            live = self._peso_actual()
+            if live is None:
+                if permitir_peso_guardado:
+                    self.var_msg.set("Sin peso guardado ni captura. CAPTURAR o elija un fardo.")
+                else:
+                    self.var_msg.set("Sin peso. Pulse CAPTURAR primero.")
                 return None
+            if not self._frozen:
+                if not self.tomar_foto():
+                    return None
             total = self._peso_actual()
             if total is None:
                 return None
+            bruto, neto, tc, tf = self._calcular_pesos(float(total))
 
         for nombre, var in (
             ("Cliente", self.var_cliente),
@@ -649,9 +819,15 @@ class HojaDiaView(tk.Frame):
             self.var_msg.set("Nº Fardo inválido")
             return None
 
-        bruto, neto, tc, tf = self._calcular_pesos(float(total))
         now = datetime.now()
-        fecha_hora = datetime.combine(self.fecha, now.time()).strftime("%Y-%m-%d %H:%M:%S")
+        # Conservar hora del registro si editamos sin nueva captura
+        reg = next((r for r in self._regs if r.id == self._target_id), None)
+        if reg and permitir_peso_guardado and not self._frozen:
+            fh = reg.fecha_hora
+            hora = self._hora(reg.fecha_hora)
+        else:
+            fh = datetime.combine(self.fecha, now.time()).strftime("%Y-%m-%d %H:%M:%S")
+            hora = now.strftime("%I:%M %p").lstrip("0").lower()
 
         return DatosEtiqueta(
             color=self.var_color.get().strip(),
@@ -667,14 +843,58 @@ class HojaDiaView(tk.Frame):
             peso_total=float(total),
             tara_carreta=tc,
             tara_fardo=tf,
-            hora=now.strftime("%I:%M %p").lstrip("0").lower(),
-            fecha_hora_registro=fecha_hora,
+            hora=hora,
+            fecha_hora_registro=fh,
         )
+
+    def guardar(self) -> None:
+        """Guarda cambios del fardo seleccionado (sin obligar a reimprimir)."""
+        if self._target_id is None and self._selected_id is not None:
+            reg = next((r for r in self._regs if r.id == self._selected_id), None)
+            if reg and not reg.activo:
+                messagebox.showinfo(
+                    "Hoja",
+                    "El fardo está oculto. Restáurelo antes de editarlo.",
+                )
+                return
+
+        datos = self._recoger(permitir_peso_guardado=True)
+        if datos is None:
+            return
+
+        target_id = self._target_id
+        try:
+            if target_id is not None:
+                self.db.actualizar(target_id, datos)
+                self.var_msg.set(f"Fardo {datos.nro_fardo} guardado (ID {target_id})")
+            else:
+                rid = self.db.insertar(datos, fecha_hora=datos.fecha_hora_registro or None)
+                self._selected_id = rid
+                self._target_id = rid
+                self.var_msg.set(f"Fardo {datos.nro_fardo} creado (ID {rid})")
+        except ValueError as exc:
+            messagebox.showwarning("Hoja", str(exc))
+            return
+
+        self.reanudar_medicion()
+        self.refrescar()
+        if self.on_saved:
+            self.on_saved()
 
     def imprimir(self) -> None:
         if self._printing:
             return
-        datos = self._recoger()
+        if self._target_id is None and self._selected_id is not None:
+            reg = next((r for r in self._regs if r.id == self._selected_id), None)
+            if reg and not reg.activo:
+                messagebox.showinfo(
+                    "Hoja",
+                    "El fardo está oculto. Restáurelo antes de imprimir.",
+                )
+                return
+
+        # Si no hay foto nueva, permitir reimprimir con pesos del registro
+        datos = self._recoger(permitir_peso_guardado=True)
         if datos is None:
             return
 

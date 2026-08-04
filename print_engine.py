@@ -1,35 +1,19 @@
 """
 Motor de impresión: render Pillow (A4 300 DPI) + Device Context Windows.
 
-Evita win32ui.CreateSolidBrush / pens: la etiqueta se dibuja en imagen
-y se transfiere al DC con CreateBitmap + BitBlt / ImageWin.Dib.
+Solo imprime valores variables según etiqueta_layout.json (sin marcos,
+sin rótulos de atributos ni datos de empresa — van en la etiqueta preimpresa).
 """
 
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageWin
 
-from config import (
-    DIRECCION,
-    EMAIL,
-    EMPRESA,
-    LABEL_HEIGHT_MM,
-    LABEL_LINE_RGB,
-    LABEL_ORIGIN_X_MM,
-    LABEL_ORIGIN_Y_MM,
-    LABEL_TEXT_RGB,
-    LABEL_WIDTH_MM,
-    MARGIN_LEFT_MM,
-    MARGIN_TOP_MM,
-    PAGE_HEIGHT_MM,
-    PAGE_WIDTH_MM,
-    PRODUCTO,
-    TELEFONO,
-    WEB,
-)
+from config import PAGE_HEIGHT_MM, PAGE_WIDTH_MM
+from label_layout import FieldLayout, LabelLayout, get_layout, load_layout
 
 if TYPE_CHECKING:
     from models import DatosEtiqueta
@@ -50,21 +34,59 @@ except ImportError:  # pragma: no cover
     Code128 = None  # type: ignore
     ImageWriter = None  # type: ignore
 
-# A4 @ 300 DPI
 PRINT_DPI = 300
-PAGE_W_PX = 2480  # round(210 / 25.4 * 300)
-PAGE_H_PX = 3508  # round(297 / 25.4 * 300)
+PAGE_W_PX = 2480
+PAGE_H_PX = 3508
 
 
 def _mm_to_px(mm: float, dpi: int = PRINT_DPI) -> int:
     return int(round(mm * dpi / 25.4))
 
 
-def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    names = (
-        ("arialbd.ttf", "arial.ttf") if bold else ("arial.ttf", "arialbd.ttf")
-    )
-    for name in names:
+def _hex_to_rgb(color: str) -> tuple[int, int, int]:
+    c = (color or "#000000").strip().lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    try:
+        return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except (ValueError, IndexError):
+        return 0, 0, 0
+
+
+def _font(
+    size: int,
+    *,
+    bold: bool = False,
+    font_name: str = "Arial",
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    base = (font_name or "Arial").replace(" ", "")
+    candidates: list[str] = []
+    if bold:
+        candidates.extend(
+            [
+                f"{base}bd.ttf",
+                f"{base}b.ttf",
+                f"{base}-Bold.ttf",
+                "arialbd.ttf",
+                "arial.ttf",
+            ]
+        )
+    else:
+        candidates.extend([f"{base}.ttf", "arial.ttf", "arialbd.ttf"])
+    # Nombres comunes Windows
+    if base.lower() == "arial":
+        candidates = (
+            ["arialbd.ttf", "arial.ttf"] if bold else ["arial.ttf", "arialbd.ttf"]
+        ) + candidates
+    elif base.lower() == "calibri":
+        candidates = (
+            ["calibrib.ttf", "calibri.ttf"] if bold else ["calibri.ttf", "calibrib.ttf"]
+        ) + candidates
+    elif base.lower() == "tahoma":
+        candidates = (
+            ["tahomabd.ttf", "tahoma.ttf"] if bold else ["tahoma.ttf", "tahomabd.ttf"]
+        ) + candidates
+    for name in candidates:
         try:
             return ImageFont.truetype(name, size)
         except OSError:
@@ -73,14 +95,11 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFon
 
 
 def _render_barcode(payload: str, max_width: int, height: int) -> Image.Image:
-    """Code128 con python-barcode → imagen Pillow."""
     text = payload or "-"
     if Code128 is None or ImageWriter is None:
-        # Fallback mínimo: rectángulo con texto
         img = Image.new("RGB", (max_width, height), "white")
         draw = ImageDraw.Draw(img)
-        draw.rectangle((0, 0, max_width - 1, height - 1), outline="black")
-        draw.text((8, height // 3), text, fill="black", font=_font(18))
+        draw.text((8, max(0, height // 3)), text, fill="black", font=_font(18))
         return img
 
     buf = io.BytesIO()
@@ -98,10 +117,7 @@ def _render_barcode(payload: str, max_width: int, height: int) -> Image.Image:
     bc = Image.open(buf).convert("RGB")
     if bc.width > max_width or bc.height > height:
         bc = bc.resize(
-            (
-                min(bc.width, max_width),
-                min(bc.height, height),
-            ),
+            (min(bc.width, max_width), min(bc.height, height)),
             Image.Resampling.LANCZOS,
         )
     canvas = Image.new("RGB", (max_width, height), "white")
@@ -111,130 +127,110 @@ def _render_barcode(payload: str, max_width: int, height: int) -> Image.Image:
     return canvas
 
 
-def render_etiqueta_a4(datos: "DatosEtiqueta") -> Image.Image:
-    """
-    Renderiza página A4 2480×3508 (300 DPI).
-    Etiqueta en esquina superior izquierda: margen 15 mm / 11 mm (P52:Y72).
-    """
-    assert abs(PAGE_W_PX - _mm_to_px(PAGE_WIDTH_MM)) <= 2
-    assert abs(PAGE_H_PX - _mm_to_px(PAGE_HEIGHT_MM)) <= 2
+def _valor_campo(datos: "DatosEtiqueta", field_id: str) -> str:
+    if field_id == "color":
+        return datos.color
+    if field_id == "cliente":
+        return datos.cliente
+    if field_id == "lote":
+        return datos.lote
+    if field_id == "dn":
+        return datos.dn
+    if field_id == "corte":
+        return datos.corte
+    if field_id == "nro_fardo":
+        return str(datos.nro_fardo)
+    if field_id == "fecha":
+        return datos.fecha
+    if field_id == "peso_bruto":
+        return f"{datos.peso_bruto:.1f}"
+    if field_id == "peso_neto":
+        return f"{datos.peso_neto:.1f}"
+    if field_id == "operario":
+        return datos.operario
+    if field_id == "hora":
+        return datos.hora
+    if field_id == "peso_total":
+        return f"{datos.peso_total:.1f}" if datos.peso_total else ""
+    if field_id == "barcode":
+        return datos.codigo_barras
+    return ""
 
-    img = Image.new("RGB", (PAGE_W_PX, PAGE_H_PX), "white")
+
+def render_etiqueta_region(
+    datos: "DatosEtiqueta",
+    layout: Optional[LabelLayout] = None,
+    *,
+    dpi: int = PRINT_DPI,
+    bg: str = "white",
+    show_guides: bool = False,
+) -> Image.Image:
+    """
+    Renderiza solo el área de la etiqueta (valores según layout).
+    show_guides=True dibuja recuadros punteados (solo preview del editor).
+    """
+    layout = layout or get_layout()
+    w = _mm_to_px(layout.label_width_mm, dpi)
+    h = _mm_to_px(layout.label_height_mm, dpi)
+    img = Image.new("RGB", (max(w, 1), max(h, 1)), bg)
     draw = ImageDraw.Draw(img)
 
-    ox = _mm_to_px(LABEL_ORIGIN_X_MM)  # 11 mm
-    oy = _mm_to_px(LABEL_ORIGIN_Y_MM)  # 15 mm
-    w = _mm_to_px(LABEL_WIDTH_MM)
-    h = _mm_to_px(LABEL_HEIGHT_MM)
-    line = LABEL_LINE_RGB
-    text_c = LABEL_TEXT_RGB
+    if show_guides:
+        draw.rectangle((0, 0, w - 1, h - 1), outline=(180, 180, 180), width=1)
 
-    def x_frac(f: float) -> int:
-        return ox + int(w * f)
+    for fld in layout.fields:
+        if not fld.visible:
+            continue
+        fld.clamp(layout.label_width_mm, layout.label_height_mm)
+        x = _mm_to_px(fld.x_mm, dpi)
+        y = _mm_to_px(fld.y_mm, dpi)
+        bw = max(_mm_to_px(fld.w_mm, dpi), 1)
+        bh = max(_mm_to_px(fld.h_mm, dpi), 1)
+        fill = _hex_to_rgb(fld.color)
 
-    def y_frac(f: float) -> int:
-        return oy + int(h * f)
+        if show_guides:
+            draw.rectangle((x, y, x + bw, y + bh), outline=(200, 200, 220), width=1)
 
-    def line_h(y: int, width: int = 3) -> None:
-        draw.line((ox, y, ox + w, y), fill=line, width=width)
+        if fld.id == "barcode":
+            bc = _render_barcode(_valor_campo(datos, "barcode"), bw, bh)
+            img.paste(bc, (x, y))
+            continue
 
-    def line_v(x: int, y1: int, y2: int, width: int = 3) -> None:
-        draw.line((x, y1, x, y2), fill=line, width=width)
+        value = _valor_campo(datos, fld.id)
+        if not value:
+            continue
+        font = _font(fld.font_size, bold=fld.bold, font_name=fld.font_name)
+        # Ajuste vertical centrado aproximado
+        bbox = draw.textbbox((0, 0), value, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if fld.align == "center":
+            tx = x + max((bw - tw) // 2, 0)
+        elif fld.align == "right":
+            tx = x + max(bw - tw - 2, 0)
+        else:
+            tx = x + 2
+        ty = y + max((bh - th) // 2, 0)
+        draw.text((tx, ty), value, font=font, fill=fill)
 
-    def text(
-        value: str,
-        x: int,
-        y: int,
-        *,
-        size: int = 28,
-        bold: bool = False,
-        fill=text_c,
-    ) -> None:
-        draw.text((x, y), value, font=_font(size, bold=bold), fill=fill)
-
-    def cell(
-        label: str,
-        value: str,
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int,
-        *,
-        unit: str = "",
-        value_size: int = 36,
-    ) -> None:
-        pad = 10
-        text(label, x1 + pad, y1 + pad, size=22, bold=True)
-        mid_y = y1 + (y2 - y1) // 2 - 4
-        text(value, x1 + pad, mid_y, size=value_size, bold=True)
-        if unit:
-            tw = draw.textlength(unit, font=_font(20))
-            text(unit, x2 - int(tw) - pad, y2 - 34, size=20)
-
-    # Marco
-    draw.rectangle((ox, oy, ox + w, oy + h), outline=line, width=4)
-
-    # Encabezado
-    y_header = y_frac(0.22)
-    line_h(y_header)
-    text(EMPRESA, ox + 14, oy + 12, size=48, bold=True)
-    text(PRODUCTO, ox + 14, oy + 70, size=24)
-    right = x_frac(0.50)
-    text(DIRECCION, right, oy + 14, size=16)
-    text(f"Tel: {TELEFONO}", right, oy + 42, size=16)
-    text(EMAIL, right, oy + 68, size=16)
-    text(WEB, right, oy + 94, size=16)
-
-    # Color | Cliente
-    y2 = y_frac(0.42)
-    mid = x_frac(0.45)
-    line_h(y2)
-    line_v(mid, y_header, y2)
-    cell("Color:", datos.color, ox, y_header, mid, y2)
-    cell("Cliente:", datos.cliente, mid, y_header, ox + w, y2)
-
-    # Lote | Dn | Corte
-    y3 = y_frac(0.62)
-    c1, c2 = x_frac(0.33), x_frac(0.60)
-    line_h(y3)
-    line_v(c1, y2, y3)
-    line_v(c2, y2, y3)
-    cell("Lote:", datos.lote, ox, y2, c1, y3)
-    cell("Dn:", datos.dn, c1, y2, c2, y3)
-    cell("Corte:", datos.corte, c2, y2, ox + w, y3, unit="mm")
-
-    # Nº Fardo | Fecha | P.Bruto | P.Neto
-    y4 = y_frac(0.82)
-    d1, d2, d3 = x_frac(0.25), x_frac(0.48), x_frac(0.72)
-    line_h(y4)
-    line_v(d1, y3, y4)
-    line_v(d2, y3, y4)
-    line_v(d3, y3, y4)
-    cell("Nº Fardo", datos.nro_fardo, ox, y3, d1, y4, value_size=30)
-    cell("Fecha", datos.fecha, d1, y3, d2, y4, value_size=26)
-    cell("P.Bruto", f"{datos.peso_bruto:.1f}", d2, y3, d3, y4, unit="kg", value_size=30)
-    cell("P.Neto", f"{datos.peso_neto:.1f}", d3, y3, ox + w, y4, unit="kg", value_size=30)
-
-    # Código de barras
-    bc_pad = 24
-    bc_h = max(oy + h - (y4 + 16) - 12, 80)
-    barcode = _render_barcode(
-        datos.codigo_barras,
-        max_width=w - 2 * bc_pad,
-        height=bc_h,
-    )
-    img.paste(barcode, (ox + bc_pad, y4 + 16))
-
-    # Metadatos de página (márgenes documentados)
-    _ = (MARGIN_TOP_MM, MARGIN_LEFT_MM)
     return img
 
 
+def render_etiqueta_a4(
+    datos: "DatosEtiqueta",
+    layout: Optional[LabelLayout] = None,
+) -> Image.Image:
+    """Página A4 2480×3508 (300 DPI) con la etiqueta en el origen configurado."""
+    layout = layout or load_layout()
+    page = Image.new("RGB", (PAGE_W_PX, PAGE_H_PX), "white")
+    label = render_etiqueta_region(datos, layout, dpi=PRINT_DPI, bg="white", show_guides=False)
+    ox = _mm_to_px(layout.origin_x_mm)
+    oy = _mm_to_px(layout.origin_y_mm)
+    page.paste(label, (ox, oy))
+    _ = (PAGE_WIDTH_MM, PAGE_HEIGHT_MM)
+    return page
+
+
 def _blit_image_to_dc(hdc, image: Image.Image) -> None:
-    """
-    Transfiere la imagen Pillow al DC de impresora con CreateBitmap
-    (sin CreateSolidBrush / pens nativos).
-    """
     horz = hdc.GetDeviceCaps(win32con.HORZRES)
     vert = hdc.GetDeviceCaps(win32con.VERTRES)
     if horz <= 0 or vert <= 0:
@@ -244,7 +240,6 @@ def _blit_image_to_dc(hdc, image: Image.Image) -> None:
     if rgb.size != (horz, vert):
         rgb = rgb.resize((horz, vert), Image.Resampling.LANCZOS)
 
-    # Bitmap compatible + Dib → BitBlt al DC de impresora
     mem_dc = hdc.CreateCompatibleDC()
     try:
         bmp = win32ui.CreateBitmap()
@@ -265,7 +260,7 @@ def _blit_image_to_dc(hdc, image: Image.Image) -> None:
 
 
 def imprimir_etiqueta(datos: "DatosEtiqueta") -> None:
-    """Renderiza A4 en Pillow e imprime en la impresora predeterminada."""
+    """Renderiza A4 según layout e imprime en la impresora predeterminada."""
     if win32print is None or win32ui is None or win32con is None:
         raise RuntimeError(
             "pywin32 no está disponible. Instale con: pip install pywin32"

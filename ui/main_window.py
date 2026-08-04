@@ -1,4 +1,4 @@
-"""Ventana principal: pesaje, hoja, resumen, reportes y maestros."""
+"""Ventana principal: pesaje, hoja, resumen, reportes, etiqueta y maestros."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from config import PORT, SYNC_ENABLED
 from db import PesajeDatabase
 from serial_reader import SerialWeightReader
 from sync import SyncWorker
+from ui.etiqueta_editor_view import EtiquetaEditorView
 from ui.hoja_dia_view import HojaDiaView
 from ui.maestros_view import MaestrosView
 from ui.pesaje_view import PesajeView
@@ -95,6 +96,7 @@ class PrecixApp(tk.Tk):
             self.nb, self.db, on_open_day=self._abrir_dia
         )
         self.view_reportes = ReportesView(self.nb, self.db)
+        self.view_etiqueta = EtiquetaEditorView(self.nb)
         self.view_maestros = MaestrosView(
             self.nb,
             self.db.catalogo,
@@ -105,6 +107,7 @@ class PrecixApp(tk.Tk):
         self.nb.add(self.view_hoja, text="  Hoja  ")
         self.nb.add(self.view_mes, text="  Resumen mensual  ")
         self.nb.add(self.view_reportes, text="  Reportes  ")
+        self.nb.add(self.view_etiqueta, text="  Etiqueta  ")
         self.nb.add(self.view_maestros, text="  Maestros  ")
 
     def _on_maestros_change(self) -> None:
