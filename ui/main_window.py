@@ -6,7 +6,7 @@ import tkinter as tk
 from datetime import date
 from tkinter import ttk
 
-from config import PORT, SYNC_INTERVAL_S, SYNC_TOKEN, UI_REFRESH_MS, BAUDRATE
+from config import PORT, SYNC_INTERVAL_S, SYNC_TOKEN, UI_REFRESH_MS
 from db import PesajeDatabase
 from serial_reader import SerialWeightReader
 from sync import SyncWorker
@@ -192,13 +192,14 @@ class PrecixApp(tk.Tk):
 
         ok = bool(data["connected"])
         color = Theme.ST_COLOR if ok else Theme.ERR_COLOR
-        tk.Label(
+        lbl_estado = tk.Label(
             win,
             text="●  CONECTADO" if ok else "●  DESCONECTADO",
             font=("Segoe UI", 14, "bold"),
             fg=color,
             bg=Theme.PANEL,
-        ).pack(anchor="w", padx=16, pady=(14, 4))
+        )
+        lbl_estado.pack(anchor="w", padx=16, pady=(14, 4))
 
         tk.Label(
             win,
@@ -239,9 +240,6 @@ class PrecixApp(tk.Tk):
                 fg=Theme.ST_COLOR if connected else Theme.ERR_COLOR,
             )
 
-        # Reusar el label de estado (primer hijo Label)
-        lbl_estado = win.winfo_children()[0]
-
         tk.Button(
             btns,
             text="Actualizar",
@@ -272,6 +270,8 @@ class PrecixApp(tk.Tk):
         x = self.winfo_rootx() + self.winfo_width() - win.winfo_reqwidth() - 24
         y = self.winfo_rooty() + 48
         win.geometry(f"+{max(x, 40)}+{y}")
+
+    def _refresh_sync_badge(self) -> None:
         pend = self.db.contar_pendientes()
         cada = (
             f"cada {max(1, SYNC_INTERVAL_S // 60)} min"
