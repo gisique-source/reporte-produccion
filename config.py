@@ -57,20 +57,19 @@ SYNC_TIMEOUT_S = int(os.environ.get("PRECIX_SYNC_TIMEOUT_S", "10") or "10")
 
 def _sync_interval_seconds() -> int:
     """
-    Intervalo entre ciclos de sync.
-    Preferir PRECIX_SYNC_INTERVAL_MIN (minutos); si no, PRECIX_SYNC_INTERVAL_S;
-    default 1 minuto.
+    Cron interno mientras la app está abierta.
+    PRECIX_SYNC_INTERVAL_MIN (minutos) o PRECIX_SYNC_INTERVAL_S; default 5 min.
     """
     raw_min = os.environ.get("PRECIX_SYNC_INTERVAL_MIN")
     raw_sec = os.environ.get("PRECIX_SYNC_INTERVAL_S")
     try:
         if raw_min is not None and str(raw_min).strip() != "":
-            return max(15, int(float(str(raw_min).replace(",", ".")) * 60))
+            return max(60, int(float(str(raw_min).replace(",", ".")) * 60))
         if raw_sec is not None and str(raw_sec).strip() != "":
-            return max(15, int(float(str(raw_sec).replace(",", "."))))
+            return max(60, int(float(str(raw_sec).replace(",", "."))))
     except ValueError:
         pass
-    return 60  # 1 minuto
+    return 5 * 60
 
 
 SYNC_INTERVAL_S = _sync_interval_seconds()

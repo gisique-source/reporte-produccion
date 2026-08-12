@@ -58,6 +58,8 @@ def combo_entry(
     textvariable: tk.StringVar,
     values: list[str] | tuple[str, ...] = (),
     width: int = 18,
+    *,
+    editable: bool = False,
 ) -> ttk.Combobox:
     style = ttk.Style()
     style.configure(
@@ -73,7 +75,8 @@ def combo_entry(
         values=list(values),
         font=("Segoe UI", 12),
         width=width,
-        state="readonly",
+        # normal = escribir a mano + lista; readonly = solo elegir
+        state="normal" if editable else "readonly",
         style="Dark.TCombobox",
     )
 

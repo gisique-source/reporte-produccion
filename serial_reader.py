@@ -65,7 +65,51 @@ class SerialWeightReader:
                 "connected": self.connected,
                 "last_error": self.last_error,
                 "raw_line": self.raw_line,
+                "port": self.port,
+                "baudrate": BAUDRATE,
+                "bytesize": BYTESIZE,
+                "parity": PARITY,
+                "stopbits": STOPBITS,
             }
+
+    def device_info_text(self) -> str:
+        """Resumen legible del indicador Precix-Weight (para el diálogo)."""
+        data = self.snapshot()
+        parity_name = {
+            serial.PARITY_NONE: "None (N)",
+            serial.PARITY_EVEN: "Even (E)",
+            serial.PARITY_ODD: "Odd (O)",
+        }.get(data["parity"], str(data["parity"]))
+        peso = (
+            f"{data['weight']:.2f} {data['unit']}"
+            if data["weight"] is not None
+            else "— (sin lectura)"
+        )
+        st = data["status"] or "--"
+        if st == "ST":
+            est = "ST · Estable"
+        elif st == "US":
+            est = "US · Inestable"
+        else:
+            est = st
+        conn = "CONECTADO" if data["connected"] else "DESCONECTADO"
+        err = data["last_error"] or "—"
+        raw = data["raw_line"] or "—"
+        return (
+            f"Dispositivo: Precix-Weight (indicador de báscula)\n"
+            f"Estado enlace: {conn}\n"
+            f"\n"
+            f"Puerto: {data['port']}\n"
+            f"Velocidad: {data['baudrate']} baud\n"
+            f"Formato: {data['bytesize']}{parity_name[0] if parity_name else 'N'}{int(data['stopbits'])} "
+            f"({data['bytesize']} bits, paridad {parity_name}, {data['stopbits']} stop)\n"
+            f"\n"
+            f"Peso actual: {peso}\n"
+            f"Estabilidad: {est}\n"
+            f"Última trama: {raw}\n"
+            f"\n"
+            f"Último error: {err}"
+        )
 
     def _set(self, **kwargs) -> None:
         with self._lock:

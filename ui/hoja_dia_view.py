@@ -9,7 +9,14 @@ from typing import Callable, Optional
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from config import PORT, TARA_CARRETA_KG, TARA_FARDO_KG, UI_REFRESH_MS
+from config import (
+    MODO_FARDO_CONTINUAR,
+    MODO_FARDO_REINICIAR,
+    PORT,
+    TARA_CARRETA_KG,
+    TARA_FARDO_KG,
+    UI_REFRESH_MS,
+)
 from db import (
     PesajeDatabase,
     format_fecha_corta,
@@ -21,6 +28,7 @@ from print_engine import imprimir_etiqueta
 from serial_reader import SerialWeightReader
 from ui.bulk_paste_dialog import BulkPasteDialog
 from ui.widgets import Theme, combo_entry, secondary_button, text_entry
+from utils import normalizar_lote, prefijo_lote
 
 
 class HojaDiaView(tk.Frame):
@@ -73,6 +81,8 @@ class HojaDiaView(tk.Frame):
         self.var_operario = tk.StringVar()
         self.var_ir_fecha = tk.StringVar(value=format_fecha_editable(date.today()))
         self.var_mostrar_ocultos = tk.BooleanVar(value=False)
+        self.var_modo_fardo = tk.StringVar(value=self.db.get_modo_fardo())
+        self.var_modo_fardo_lbl = tk.StringVar(value="")
 
         self._regs: list[RegistroPesaje] = []
         self._regs_activos: list[RegistroPesaje] = []
@@ -300,34 +310,75 @@ class HojaDiaView(tk.Frame):
             return col
 
         col = _lab_col(mid, "Fardo")
-        ent = text_entry(col, self.var_nro, 5)
-        ent.configure(font=("Segoe UI", 10))
-        ent.pack()
+        fr_fardo = tk.Frame(col, bg=Theme.PANEL)
+        fr_fardo.pack(anchor="w")
+        self.ent_nro = text_entry(fr_fardo, self.var_nro, 4)
+        self.ent_nro.configure(font=("Segoe UI", 10))
+        self.ent_nro.pack(side=tk.LEFT)
+
+        self.btn_fardo_seguir = tk.Button(
+            fr_fardo,
+            text="Seguir",
+            font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT,
+            padx=5,
+            pady=1,
+            cursor="hand2",
+            command=lambda: self._set_modo_fardo(MODO_FARDO_CONTINUAR),
+        )
+        self.btn_fardo_seguir.pack(side=tk.LEFT, padx=(4, 2))
+
+        self.btn_fardo_nuevo = tk.Button(
+            fr_fardo,
+            text="Nuevo",
+            font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT,
+            padx=5,
+            pady=1,
+            cursor="hand2",
+            command=lambda: self._set_modo_fardo(MODO_FARDO_REINICIAR),
+        )
+        self.btn_fardo_nuevo.pack(side=tk.LEFT)
+        self._actualizar_lbl_modo_fardo()
 
         col = _lab_col(mid, "Cliente")
-        self.cb_cliente = combo_entry(col, self.var_cliente, width=12)
+        self.cb_cliente = combo_entry(col, self.var_cliente, width=12, editable=True)
         self.cb_cliente.pack()
 
         col = _lab_col(mid, "Lote")
-        ent = text_entry(col, self.var_lote, 8)
-        ent.configure(font=("Segoe UI", 10))
-        ent.pack()
+        self.ent_lote = text_entry(col, self.var_lote, 12)
+        self.ent_lote.configure(font=("Segoe UI", 10))
+        self.ent_lote.pack()
+        self.ent_lote.bind("<FocusIn>", self._on_lote_focus_in)
+        self.ent_lote.bind("<FocusOut>", self._on_lote_focus_out)
 
         col = _lab_col(mid, "Color")
-        self.cb_color = combo_entry(col, self.var_color, width=8)
+        self.cb_color = combo_entry(col, self.var_color, width=8, editable=True)
         self.cb_color.pack()
 
         col = _lab_col(mid, "Dn")
-        self.cb_dn = combo_entry(col, self.var_dn, width=5)
+        self.cb_dn = combo_entry(col, self.var_dn, width=5, editable=True)
         self.cb_dn.pack()
 
         col = _lab_col(mid, "Corte")
-        self.cb_corte = combo_entry(col, self.var_corte, width=5)
+        self.cb_corte = combo_entry(col, self.var_corte, width=5, editable=True)
         self.cb_corte.pack()
 
         col = _lab_col(mid, "Op.")
-        self.cb_operario = combo_entry(col, self.var_operario, width=8)
+        self.cb_operario = combo_entry(col, self.var_operario, width=8, editable=True)
         self.cb_operario.pack()
+
+        # Fila correlativo: seguir día anterior vs serie nueva del día
+        row_modo = tk.Frame(bar, bg=Theme.PANEL)
+        row_modo.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(
+            row_modo,
+            textvariable=self.var_modo_fardo_lbl,
+            font=("Segoe UI", 9),
+            fg=Theme.MUTED,
+            bg=Theme.PANEL,
+            anchor="w",
+        ).pack(side=tk.LEFT)
 
         # Fila 2: botones siempre visibles a todo el ancho
         row2 = tk.Frame(bar, bg=Theme.PANEL)
@@ -383,7 +434,10 @@ class HojaDiaView(tk.Frame):
 
         tk.Label(
             row2,
-            text="En «Siguiente»: peso en vivo → Bruto/Neto auto → CAPTURAR → IMPRIMIR",
+            text=(
+                "Complete o elija Cliente/Lote/Color/Dn/Corte/Op. · "
+                "peso en vivo → CAPTURAR (opcional) → GUARDAR o IMPRIMIR"
+            ),
             font=("Segoe UI", 9),
             fg=Theme.MUTED,
             bg=Theme.PANEL,
@@ -449,14 +503,106 @@ class HojaDiaView(tk.Frame):
             if actual and actual not in valores:
                 valores = [actual] + valores
             cb["values"] = valores
-            if actual in valores:
+            # Conservar lo tipado/seleccionado; solo rellenar si está vacío
+            if actual:
                 var.set(actual)
             elif valores:
                 var.set(valores[0])
             else:
                 var.set("")
 
+    def _actualizar_lbl_modo_fardo(self) -> None:
+        modo = self.var_modo_fardo.get()
+        if modo not in (MODO_FARDO_CONTINUAR, MODO_FARDO_REINICIAR):
+            modo = MODO_FARDO_CONTINUAR
+            self.var_modo_fardo.set(modo)
+        if modo == MODO_FARDO_CONTINUAR:
+            self.var_modo_fardo_lbl.set(
+                "Nº Fardo: Seguir correlativo (incluye día anterior)  ·  pulse Nuevo para reiniciar en 1"
+            )
+            self.btn_fardo_seguir.configure(
+                bg=Theme.ST_COLOR, fg="#fff", activebackground="#27ae60"
+            )
+            self.btn_fardo_nuevo.configure(
+                bg="#555", fg="#ddd", activebackground="#666"
+            )
+        else:
+            self.var_modo_fardo_lbl.set(
+                "Nº Fardo: Serie nueva del día (desde 1)  ·  pulse Seguir para continuar del anterior"
+            )
+            self.btn_fardo_nuevo.configure(
+                bg=Theme.US_COLOR, fg="#111", activebackground="#f39c12"
+            )
+            self.btn_fardo_seguir.configure(
+                bg="#555", fg="#ddd", activebackground="#666"
+            )
+
+    def _set_modo_fardo(self, modo: str) -> None:
+        if modo not in (MODO_FARDO_CONTINUAR, MODO_FARDO_REINICIAR):
+            return
+        self.var_modo_fardo.set(modo)
+        self.db.set_modo_fardo(modo)
+        self._actualizar_lbl_modo_fardo()
+        # Solo recalcular correlativo en hueco «siguiente»
+        if self._modo_nuevo:
+            nro = self.db.siguiente_nro_fardo(modo, dia=self.fecha)
+            self.var_nro.set(str(nro))
+            self.var_modo.set(
+                f"▶  SIGUIENTE FARDO  #{nro}  ·  listo para pesar / registrar"
+            )
+            self.var_msg.set(
+                f"Correlativo: {'seguir día anterior' if modo == MODO_FARDO_CONTINUAR else 'nuevo desde 1'} → #{nro}"
+            )
+            # Actualizar fila fantasma
+            if self.tree.exists("__nuevo__"):
+                vals = list(self.tree.item("__nuevo__", "values"))
+                if vals:
+                    vals[0] = nro
+                    self.tree.item("__nuevo__", values=vals)
+            self._show_detail(None)
+
+    def _lote_prefijo(self) -> str:
+        return prefijo_lote(self.fecha.year)
+
+    def _asegurar_prefijo_lote(self) -> None:
+        """Deja ``26LOC `` listo para que el operario solo complete el número."""
+        cur = self.var_lote.get()
+        pref = self._lote_prefijo()
+        if not cur.strip():
+            self.var_lote.set(pref)
+            return
+        norm = normalizar_lote(cur, anio=self.fecha.year)
+        if norm:
+            self.var_lote.set(norm)
+        elif not cur.upper().replace(" ", "").startswith(
+            pref.upper().replace(" ", "")
+        ):
+            self.var_lote.set(pref + cur.strip())
+
+    def _on_lote_focus_in(self, _event=None) -> None:
+        self._asegurar_prefijo_lote()
+        # Cursor al final para escribir el número tras «26LOC »
+        try:
+            self.ent_lote.icursor(tk.END)
+        except tk.TclError:
+            pass
+
+    def _on_lote_focus_out(self, _event=None) -> None:
+        cur = self.var_lote.get().strip()
+        pref = self._lote_prefijo()
+        if not cur or cur.upper() == pref.strip().upper():
+            self.var_lote.set(pref)
+            return
+        norm = normalizar_lote(cur, anio=self.fecha.year)
+        if norm:
+            self.var_lote.set(norm)
+        else:
+            self._asegurar_prefijo_lote()
+
     def refrescar(self) -> None:
+        self.var_modo_fardo.set(self.db.get_modo_fardo())
+        if hasattr(self, "btn_fardo_seguir"):
+            self._actualizar_lbl_modo_fardo()
         self.var_fecha.set(format_fecha_corta(self.fecha))
         self.var_ir_fecha.set(format_fecha_editable(self.fecha))
         self._regs = self.db.por_fecha(
@@ -509,8 +655,10 @@ class HojaDiaView(tk.Frame):
         )
         self._regs_activos = activos
 
-        # Fila fantasma: siguiente fardo (hueco listo para pesar)
-        nro_sig = self.db.siguiente_nro_fardo(dia=self.fecha)
+        # Fila 2 de la tabla fantasma: siguiente fardo
+        nro_sig = self.db.siguiente_nro_fardo(
+            self.var_modo_fardo.get(), dia=self.fecha
+        )
         last = activos[-1] if activos else None
         self.tree.insert(
             "",
@@ -569,11 +717,14 @@ class HojaDiaView(tk.Frame):
 
         activos = [r for r in self._regs if r.activo] if self._regs else []
         last = activos[-1] if activos else None
-        nro = self.db.siguiente_nro_fardo(dia=self.fecha)
+        nro = self.db.siguiente_nro_fardo(
+            self.var_modo_fardo.get(), dia=self.fecha
+        )
 
         if last:
             self.var_cliente.set(last.cliente)
-            self.var_lote.set(last.lote)
+            lote = normalizar_lote(last.lote, anio=self.fecha.year)
+            self.var_lote.set(lote if lote else self._lote_prefijo())
             self.var_color.set(last.color)
             self.var_dn.set(last.denier)
             self.var_corte.set(last.corte)
@@ -582,18 +733,19 @@ class HojaDiaView(tk.Frame):
             tf = last.tara_fardo if last.tara_fardo > 0 else TARA_FARDO_KG
             self._tara_prep = (tc, tf)
         else:
-            self.var_lote.set("")
+            self.var_lote.set(self._lote_prefijo())
             self._tara_prep = (TARA_CARRETA_KG, TARA_FARDO_KG)
 
         self.var_nro.set(str(nro))
-        self.var_modo.set(f"▶  SIGUIENTE FARDO  #{nro}  ·  listo para pesar")
+        self.var_modo.set(f"▶  SIGUIENTE FARDO  #{nro}  ·  listo para pesar / registrar")
         self.lbl_modo.config(fg=Theme.ST_COLOR)
         self.var_hint.set(
-            f"Hueco #{nro} · peso en vivo actualiza Bruto/Neto · "
-            f"CAPTURAR → IMPRIMIR / SUBIR (crea el registro)"
+            f"Hueco #{nro} · complete campos (Lote {self._lote_prefijo().strip()} + nº) · "
+            f"peso en vivo · GUARDAR registra · IMPRIMIR / SUBIR imprime y guarda"
         )
         self.var_msg.set("")
         self.refrescar_maestros()
+        self._asegurar_prefijo_lote()
 
         self._select_tree_iid("__nuevo__")
         self._show_detail(None)
@@ -619,7 +771,8 @@ class HojaDiaView(tk.Frame):
         self._tara_prep = (self._peso_edit[3], self._peso_edit[4])
         self.var_nro.set(str(reg.nro_fardo))
         self.var_cliente.set(reg.cliente)
-        self.var_lote.set(reg.lote)
+        lote = normalizar_lote(reg.lote, anio=self.fecha.year)
+        self.var_lote.set(lote if lote else reg.lote)
         self.var_color.set(reg.color)
         self.var_dn.set(reg.denier)
         self.var_corte.set(reg.corte)
@@ -674,10 +827,10 @@ class HojaDiaView(tk.Frame):
             self.detail.insert(
                 tk.END,
                 (
-                    f"SIGUIENTE FARDO #{nro} — hueco listo para la próxima subida\n"
-                    f"Cliente/Lote/Color/Dn/Corte/Op. se copian del último registro.\n"
-                    f"El peso en vivo calcula P.Bruto y P.Neto al instante.\n"
-                    f"CAPTURAR congela el peso → IMPRIMIR / SUBIR crea el fardo #{nro}."
+                    f"SIGUIENTE FARDO #{nro} — complete o elija los datos y registre\n"
+                    f"Lote siempre: {self._lote_prefijo().strip()} + número (ej. {self._lote_prefijo()}15).\n"
+                    f"Cliente/Color/Dn/Corte/Op. se pueden elegir o escribir a mano.\n"
+                    f"El peso en vivo calcula P.Bruto y P.Neto. GUARDAR crea el fardo #{nro}."
                 ),
             )
         else:
@@ -965,7 +1118,6 @@ class HojaDiaView(tk.Frame):
 
         for nombre, var in (
             ("Cliente", self.var_cliente),
-            ("Lote", self.var_lote),
             ("Color", self.var_color),
             ("Dn", self.var_dn),
             ("Corte", self.var_corte),
@@ -974,6 +1126,21 @@ class HojaDiaView(tk.Frame):
             if not var.get().strip():
                 self.var_msg.set(f"Complete: {nombre}")
                 return None
+
+        lote = normalizar_lote(self.var_lote.get(), anio=self.fecha.year)
+        if not lote:
+            self.var_msg.set(
+                f"Lote incompleto. Use {self._lote_prefijo().strip()} + número "
+                f"(ej. {self._lote_prefijo()}15)"
+            )
+            self.var_lote.set(self._lote_prefijo())
+            try:
+                self.ent_lote.focus_set()
+                self.ent_lote.icursor(tk.END)
+            except tk.TclError:
+                pass
+            return None
+        self.var_lote.set(lote)
 
         nro_txt = self.var_nro.get().strip()
         if not nro_txt.isdigit() or int(nro_txt) < 1:
@@ -993,7 +1160,7 @@ class HojaDiaView(tk.Frame):
         return DatosEtiqueta(
             color=self.var_color.get().strip(),
             cliente=self.var_cliente.get().strip(),
-            lote=self.var_lote.get().strip(),
+            lote=lote,
             dn=self.var_dn.get().strip(),
             corte=self.var_corte.get().strip(),
             nro_fardo=str(int(nro_txt)),

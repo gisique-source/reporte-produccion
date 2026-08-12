@@ -12,7 +12,6 @@ from typing import Any, Optional
 
 from config import (
     SYNC_API_URL,
-    SYNC_ENABLED,
     SYNC_INTERVAL_S,
     SYNC_PLANTA,
     SYNC_TIMEOUT_S,
@@ -35,36 +34,36 @@ class _PostResult:
 
 class SyncWorker:
     """
-    Hilo daemon: cada N segundos (configurable) envía registros con
-    estado_sincronizado = 0. Auth: Authorization Bearer + planta.
-    Cada intento se registra en sync_auditoria (éxito o error).
+    Cron interno: cada N segundos (default 5 min) sube pendientes
+    mientras la aplicación está en ejecución. Auth Bearer + planta.
+    Cada intento se registra en sync_auditoria.
     """
 
     def __init__(self, db: PesajeDatabase) -> None:
         self.db = db
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._flush_lock = threading.Lock()
         self.last_error: str = ""
         self.last_ok_at: str = ""
+        self.busy = False
 
     def start(self) -> None:
-        if not SYNC_ENABLED:
-            logger.info("Sync deshabilitado (PRECIX_SYNC_ENABLED!=1)")
-            return
+        """Arranca el cron al abrir la app (no depende de un scheduler externo)."""
         if not SYNC_TOKEN:
             self.last_error = "Falta PRECIX_SYNC_TOKEN"
             logger.warning(
-                "Sync habilitado pero sin PRECIX_SYNC_TOKEN — la API responderá 401"
+                "Cron de sync activo pero sin PRECIX_SYNC_TOKEN — la API responderá 401"
             )
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._run, name="SyncWorker", daemon=True
+            target=self._run, name="SyncCron", daemon=True
         )
         self._thread.start()
         logger.info(
-            "SyncWorker iniciado · cada %ss · planta=%s · url=%s",
+            "Cron sync cada %ss · planta=%s · url=%s",
             SYNC_INTERVAL_S,
             SYNC_PLANTA,
             SYNC_API_URL,
@@ -76,45 +75,82 @@ class SyncWorker:
             self._thread.join(timeout=2.0)
             self._thread = None
 
-    def sync_now(self) -> int:
-        """Un ciclo manual; retorna cantidad marcada como sincronizada."""
-        return self._flush_pending()
+    def sync_now(self, *, continuar_si_falla: bool = True) -> dict[str, int]:
+        """
+        Subida inmediata de pendientes (botón Auditoría).
+        Retorna {ok, error, restantes}.
+        """
+        return self._flush_pending(
+            continuar_si_falla=continuar_si_falla, vaciar_cola=True
+        )
 
     def _run(self) -> None:
+        # Primer ciclo al arrancar, luego cada intervalo (cron 5 min).
         while not self._stop.is_set():
             try:
-                self._flush_pending()
+                self._flush_pending(continuar_si_falla=False, vaciar_cola=True)
             except Exception as exc:  # noqa: BLE001
                 self.last_error = str(exc)
                 logger.debug("Sync ciclo error: %s", exc)
             self._stop.wait(SYNC_INTERVAL_S)
 
-    def _flush_pending(self) -> int:
-        if SYNC_ENABLED and not SYNC_TOKEN:
+    def _flush_pending(
+        self,
+        *,
+        continuar_si_falla: bool = False,
+        vaciar_cola: bool = False,
+    ) -> dict[str, int]:
+        if not SYNC_TOKEN:
             self.last_error = "Falta PRECIX_SYNC_TOKEN"
-            return 0
+            return {"ok": 0, "error": 0, "restantes": self.db.contar_pendientes()}
 
-        pendientes = self.db.pendientes()
-        if not pendientes:
-            return 0
+        if not self._flush_lock.acquire(blocking=False):
+            return {"ok": 0, "error": 0, "restantes": self.db.contar_pendientes()}
 
-        ok_ids: list[int] = []
-        for reg in pendientes:
-            result = self._post(reg)
-            self._auditar(reg, result)
-            if result.ok:
-                ok_ids.append(reg.id)
-                self.last_error = ""
-            else:
-                self.last_error = result.mensaje or f"HTTP {result.http_status}"
-                break
+        self.busy = True
+        ok_total = 0
+        err_total = 0
+        try:
+            lotes = 0
+            max_lotes = 40 if vaciar_cola else 1
+            while lotes < max_lotes:
+                lotes += 1
+                pendientes = self.db.pendientes(limite=50)
+                if not pendientes:
+                    break
+                ok_ids: list[int] = []
+                abortar = False
+                for reg in pendientes:
+                    result = self._post(reg)
+                    self._auditar(reg, result)
+                    if result.ok:
+                        ok_ids.append(reg.id)
+                        self.last_error = ""
+                    else:
+                        err_total += 1
+                        self.last_error = result.mensaje or f"HTTP {result.http_status}"
+                        if not continuar_si_falla:
+                            abortar = True
+                            break
+                if ok_ids:
+                    self.db.marcar_sincronizados(ok_ids)
+                    ok_total += len(ok_ids)
+                    from datetime import datetime
 
-        if ok_ids:
-            self.db.marcar_sincronizados(ok_ids)
-            from datetime import datetime
+                    self.last_ok_at = datetime.now().strftime("%H:%M:%S")
+                if abortar or (not continuar_si_falla and err_total):
+                    break
+                if len(pendientes) < 50:
+                    break
+        finally:
+            self.busy = False
+            self._flush_lock.release()
 
-            self.last_ok_at = datetime.now().strftime("%H:%M:%S")
-        return len(ok_ids)
+        return {
+            "ok": ok_total,
+            "error": err_total,
+            "restantes": self.db.contar_pendientes(),
+        }
 
     def _auditar(self, reg: RegistroPesaje, result: _PostResult) -> None:
         try:

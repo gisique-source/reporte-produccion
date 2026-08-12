@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import date, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
-from config import SYNC_API_URL, SYNC_ENABLED, SYNC_INTERVAL_S, SYNC_PLANTA, SYNC_TOKEN
+from config import SYNC_API_URL, SYNC_INTERVAL_S, SYNC_PLANTA, SYNC_TOKEN
 from db import PesajeDatabase, format_fecha_editable, parse_fecha_produccion
 from models import RegistroAuditoriaSync
 from ui.widgets import Theme, secondary_button, text_entry
+
+if TYPE_CHECKING:
+    from sync import SyncWorker
 
 
 class AuditoriaSyncView(tk.Frame):
@@ -32,9 +36,16 @@ class AuditoriaSyncView(tk.Frame):
         ("msg", "Detalle", 160),
     )
 
-    def __init__(self, master: tk.Widget, db: PesajeDatabase) -> None:
+    def __init__(
+        self,
+        master: tk.Widget,
+        db: PesajeDatabase,
+        sync: Optional["SyncWorker"] = None,
+    ) -> None:
         super().__init__(master, bg=Theme.BG)
         self.db = db
+        self.sync = sync
+        self._subiendo = False
         today = date.today()
         self.var_desde = tk.StringVar(value=format_fecha_editable(today - timedelta(days=7)))
         self.var_hasta = tk.StringVar(value=format_fecha_editable(today))
@@ -56,6 +67,21 @@ class AuditoriaSyncView(tk.Frame):
             fg=Theme.ACCENT,
             bg=Theme.BG,
         ).pack(side=tk.LEFT)
+        self.btn_subir = tk.Button(
+            head,
+            text="⬆  Subir datos faltantes",
+            font=("Segoe UI", 11, "bold"),
+            fg="#ffffff",
+            bg=Theme.BTN_BG,
+            activeforeground="#ffffff",
+            activebackground=Theme.BTN_ACTIVE,
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            cursor="hand2",
+            command=self.subir_faltantes,
+        )
+        self.btn_subir.pack(side=tk.RIGHT, padx=(8, 0))
         secondary_button(head, "Actualizar", self.refrescar).pack(side=tk.RIGHT)
 
         tk.Label(
@@ -176,16 +202,69 @@ class AuditoriaSyncView(tk.Frame):
         hasta = h.strftime("%Y-%m-%d") if h else None
         return desde, hasta
 
+    def subir_faltantes(self) -> None:
+        if self.sync is None:
+            messagebox.showwarning("Auditoría", "Sync no está disponible.")
+            return
+        if self._subiendo or self.sync.busy:
+            messagebox.showinfo("Auditoría", "Ya hay una subida en curso.")
+            return
+        if not SYNC_TOKEN:
+            messagebox.showwarning(
+                "Auditoría",
+                "Falta PRECIX_SYNC_TOKEN. Configure el token en las variables de entorno.",
+            )
+            return
+        pend = self.db.contar_pendientes()
+        if pend == 0:
+            messagebox.showinfo("Auditoría", "No hay registros pendientes de subir.")
+            self.refrescar()
+            return
+        if not messagebox.askyesno(
+            "Subir a la nube",
+            f"Hay {pend} fardo(s) pendiente(s).\n\n"
+            "¿Enviarlos ahora al sistema integrado?",
+        ):
+            return
+        self._subiendo = True
+        self.btn_subir.config(state=tk.DISABLED, text="Subiendo…")
+        self.var_cfg.set(f"Subiendo {pend} pendiente(s)…")
+
+        def _work() -> None:
+            try:
+                result = self.sync.sync_now(continuar_si_falla=True)
+            except Exception as exc:  # noqa: BLE001
+                result = {"ok": 0, "error": 1, "restantes": pend, "_exc": str(exc)}
+            self.after(0, lambda: self._fin_subida(result))
+
+        threading.Thread(target=_work, name="AuditManualSync", daemon=True).start()
+
+    def _fin_subida(self, result: dict) -> None:
+        self._subiendo = False
+        self.btn_subir.config(state=tk.NORMAL, text="⬆  Subir datos faltantes")
+        self.refrescar()
+        if result.get("_exc"):
+            messagebox.showerror("Auditoría", f"Error al subir:\n{result['_exc']}")
+            return
+        ok = int(result.get("ok") or 0)
+        err = int(result.get("error") or 0)
+        rest = int(result.get("restantes") or 0)
+        messagebox.showinfo(
+            "Subida a la nube",
+            f"Enviados OK: {ok}\nErrores: {err}\nPendientes restantes: {rest}",
+        )
+
     def refrescar(self) -> None:
-        on = "ON" if SYNC_ENABLED else "OFF"
         tok = "token OK" if SYNC_TOKEN else "sin token"
         cada = (
             f"cada {max(1, SYNC_INTERVAL_S // 60)} min"
             if SYNC_INTERVAL_S >= 60
             else f"cada {SYNC_INTERVAL_S}s"
         )
+        pend = self.db.contar_pendientes()
         self.var_cfg.set(
-            f"Sync {on} · {tok} · planta {SYNC_PLANTA} · {cada} · {SYNC_API_URL}"
+            f"Cron {cada} mientras la app está abierta · {tok} · "
+            f"planta {SYNC_PLANTA} · {pend} pendiente(s) · {SYNC_API_URL}"
         )
 
         filtro = self.var_filtro.get()
@@ -242,6 +321,7 @@ class AuditoriaSyncView(tk.Frame):
 
         total_db, ok_db = self.db.contar_auditoria_sync()
         self.var_resumen.set(
-            f"Mostrando {len(self._rows)} · en vista OK {ok_n} / Error {err_n}  ·  "
-            f"Histórico total {total_db} (exitosos {ok_db})"
+            f"{pend} pendiente(s) de subir  ·  "
+            f"Mostrando {len(self._rows)} · vista OK {ok_n} / Error {err_n}  ·  "
+            f"Histórico {total_db} (exitosos {ok_db})"
         )

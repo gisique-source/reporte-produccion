@@ -6,7 +6,7 @@ import tkinter as tk
 from datetime import date
 from tkinter import ttk
 
-from config import PORT, SYNC_ENABLED, SYNC_INTERVAL_S, SYNC_TOKEN
+from config import PORT, SYNC_INTERVAL_S, SYNC_TOKEN, UI_REFRESH_MS, BAUDRATE
 from db import PesajeDatabase
 from serial_reader import SerialWeightReader
 from sync import SyncWorker
@@ -42,6 +42,7 @@ class PrecixApp(tk.Tk):
 
         self.reader.start()
         self.sync.start()
+        self.after(200, self._refresh_device_light)
         self.after(5000, self._refresh_sync_badge)
 
     def _build(self) -> None:
@@ -56,14 +57,35 @@ class PrecixApp(tk.Tk):
             bg=Theme.BG,
         ).pack(side=tk.LEFT)
 
+        # Derecha: sync + luz de conexión Precix (clic = detalle)
+        right = tk.Frame(header, bg=Theme.BG)
+        right.pack(side=tk.RIGHT)
+
+        self.var_device = tk.StringVar(value=f"●  {PORT} OFF")
+        self.btn_device = tk.Button(
+            right,
+            textvariable=self.var_device,
+            font=("Segoe UI", 10, "bold"),
+            fg="#ffffff",
+            bg="#555555",
+            activeforeground="#ffffff",
+            activebackground="#666666",
+            relief=tk.FLAT,
+            padx=12,
+            pady=5,
+            cursor="hand2",
+            command=self._show_device_info,
+        )
+        self.btn_device.pack(side=tk.RIGHT)
+
         self.lbl_sync = tk.Label(
-            header,
+            right,
             text="",
             font=("Segoe UI", 10),
             fg=Theme.MUTED,
             bg=Theme.BG,
         )
-        self.lbl_sync.pack(side=tk.RIGHT)
+        self.lbl_sync.pack(side=tk.RIGHT, padx=(0, 12))
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -97,7 +119,7 @@ class PrecixApp(tk.Tk):
             self.nb, self.db, on_open_day=self._abrir_dia
         )
         self.view_reportes = ReportesView(self.nb, self.db)
-        self.view_auditoria = AuditoriaSyncView(self.nb, self.db)
+        self.view_auditoria = AuditoriaSyncView(self.nb, self.db, sync=self.sync)
         self.view_etiqueta = EtiquetaEditorView(self.nb)
         self.view_maestros = MaestrosView(
             self.nb,
@@ -135,28 +157,141 @@ class PrecixApp(tk.Tk):
         self.view_hoja.set_fecha(dia)
         self.nb.select(self.view_hoja)
 
-    def _refresh_sync_badge(self) -> None:
-        pend = self.db.contar_pendientes()
-        if not SYNC_ENABLED:
-            self.lbl_sync.config(
-                text=f"Sync OFF · {pend} pendientes locales",
-                fg=Theme.MUTED,
+    def _refresh_device_light(self) -> None:
+        """Luz superior derecha: verde si el indicador Precix está conectado."""
+        data = self.reader.snapshot()
+        if data["connected"]:
+            peso = (
+                f"{data['weight']:.1f} {data['unit']}"
+                if data["weight"] is not None
+                else "OK"
             )
-        elif not SYNC_TOKEN:
+            self.var_device.set(f"●  Precix ON · {peso}")
+            self.btn_device.configure(
+                bg=Theme.ST_COLOR,
+                activebackground="#27ae60",
+                fg="#ffffff",
+            )
+        else:
+            self.var_device.set(f"●  Precix OFF · {PORT}")
+            self.btn_device.configure(
+                bg=Theme.ERR_COLOR,
+                activebackground="#c0392b",
+                fg="#ffffff",
+            )
+        self.after(UI_REFRESH_MS, self._refresh_device_light)
+
+    def _show_device_info(self) -> None:
+        """Popup con datos del dispositivo físico Precix-Weight."""
+        data = self.reader.snapshot()
+        win = tk.Toplevel(self)
+        win.title("Dispositivo Precix-Weight")
+        win.configure(bg=Theme.PANEL)
+        win.transient(self)
+        win.resizable(False, False)
+
+        ok = bool(data["connected"])
+        color = Theme.ST_COLOR if ok else Theme.ERR_COLOR
+        tk.Label(
+            win,
+            text="●  CONECTADO" if ok else "●  DESCONECTADO",
+            font=("Segoe UI", 14, "bold"),
+            fg=color,
+            bg=Theme.PANEL,
+        ).pack(anchor="w", padx=16, pady=(14, 4))
+
+        tk.Label(
+            win,
+            text="Indicador industrial Precix-Weight (báscula RS-232)",
+            font=("Segoe UI", 10),
+            fg=Theme.MUTED,
+            bg=Theme.PANEL,
+        ).pack(anchor="w", padx=16, pady=(0, 8))
+
+        info = tk.Text(
+            win,
+            width=56,
+            height=14,
+            bg=Theme.INPUT_BG,
+            fg=Theme.FG,
+            font=("Consolas", 10),
+            relief=tk.FLAT,
+            wrap=tk.WORD,
+            padx=10,
+            pady=10,
+        )
+        info.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 8))
+        info.insert("1.0", self.reader.device_info_text())
+        info.configure(state=tk.DISABLED)
+
+        btns = tk.Frame(win, bg=Theme.PANEL)
+        btns.pack(fill=tk.X, padx=16, pady=(0, 14))
+
+        def _refresh_popup() -> None:
+            info.configure(state=tk.NORMAL)
+            info.delete("1.0", tk.END)
+            info.insert("1.0", self.reader.device_info_text())
+            info.configure(state=tk.DISABLED)
+            d = self.reader.snapshot()
+            connected = bool(d["connected"])
+            lbl_estado.config(
+                text="●  CONECTADO" if connected else "●  DESCONECTADO",
+                fg=Theme.ST_COLOR if connected else Theme.ERR_COLOR,
+            )
+
+        # Reusar el label de estado (primer hijo Label)
+        lbl_estado = win.winfo_children()[0]
+
+        tk.Button(
+            btns,
+            text="Actualizar",
+            font=("Segoe UI", 10, "bold"),
+            fg="#fff",
+            bg=Theme.ACCENT,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=_refresh_popup,
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            btns,
+            text="Cerrar",
+            font=("Segoe UI", 10, "bold"),
+            fg="#fff",
+            bg="#555",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=win.destroy,
+        ).pack(side=tk.RIGHT)
+
+        win.update_idletasks()
+        x = self.winfo_rootx() + self.winfo_width() - win.winfo_reqwidth() - 24
+        y = self.winfo_rooty() + 48
+        win.geometry(f"+{max(x, 40)}+{y}")
+        pend = self.db.contar_pendientes()
+        cada = (
+            f"cada {max(1, SYNC_INTERVAL_S // 60)} min"
+            if SYNC_INTERVAL_S >= 60
+            else f"cada {SYNC_INTERVAL_S}s"
+        )
+        if not SYNC_TOKEN:
             self.lbl_sync.config(
-                text=f"Sync: falta PRECIX_SYNC_TOKEN · {pend} pend.",
+                text=f"Cron {cada} · falta TOKEN · {pend} pend.",
                 fg=Theme.US_COLOR,
             )
         elif self.sync.last_error:
             self.lbl_sync.config(
-                text=f"Sync: {pend} pend. · {self.sync.last_error}",
+                text=f"Cron {cada} · {pend} pend. · {self.sync.last_error}",
                 fg=Theme.US_COLOR,
             )
         else:
-            cada = f"cada {max(1, SYNC_INTERVAL_S // 60)} min" if SYNC_INTERVAL_S >= 60 else f"cada {SYNC_INTERVAL_S}s"
             ok = f" · OK {self.sync.last_ok_at}" if self.sync.last_ok_at else ""
             self.lbl_sync.config(
-                text=f"Sync {cada} · {pend} pend.{ok}",
+                text=f"Cron {cada} · {pend} pend.{ok}",
                 fg=Theme.ST_COLOR if pend == 0 else Theme.MUTED,
             )
         self.after(5000, self._refresh_sync_badge)

@@ -33,11 +33,11 @@ Variables de entorno (Windows / Vercel del sistema integrado):
 
 | Variable | Valores | Default | Descripción |
 |----------|---------|---------|-------------|
-| `PRECIX_SYNC_ENABLED` | `1` / `0` | `0` | Activa el hilo de sync |
+| `PRECIX_SYNC_ENABLED` | `1` / `0` | — | Ya no es necesario: el cron corre mientras la app está abierta |
 | `PRECIX_SYNC_URL` | URL absoluta | (ejemplo) | `POST /api/v1/precix/pesajes` |
 | `PRECIX_SYNC_TOKEN` | string | _(vacío)_ | **Obligatorio** si sync ON → `Authorization: Bearer …` |
 | `PRECIX_DEFAULT_PLANTA` o `PRECIX_PLANTA` | string | `ATE-EXTRUSORA-1` | Planta en body `planta` + header `X-Precix-Planta` |
-| `PRECIX_SYNC_INTERVAL_MIN` | número | `1` | Minutos entre ciclos (mín. efectivo ~15 s) |
+| `PRECIX_SYNC_INTERVAL_MIN` | número | `5` | Minutos del cron interno (mín. 1 min) |
 | `PRECIX_SYNC_INTERVAL_S` | número | — | Alternativa en segundos (si no hay `_MIN`) |
 | `PRECIX_SYNC_TIMEOUT_S` | número | `10` | Timeout HTTP por request |
 
