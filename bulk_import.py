@@ -324,6 +324,23 @@ def parsear_pegado(
             )
         )
 
+    seen: dict[tuple[str, str], int] = {}
+    for f in filas:
+        nro = f.nro_fardo.strip()
+        lote = f.lote.strip()
+        if not nro or not lote:
+            continue
+        clave = (
+            lote.casefold(),
+            str(int(nro)) if nro.isdigit() else nro,
+        )
+        if clave in seen:
+            f.errores.append(
+                f"Fardo {nro} repetido en el lote {lote} (mismo pegado)"
+            )
+        else:
+            seen[clave] = 1
+
     return ResultadoParseo(filas, mapeo, aviso)
 
 

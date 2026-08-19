@@ -117,6 +117,22 @@ class RegistroAuditoriaSync:
 
 
 @dataclass
+class RegistroAuditoriaPesaje:
+    """Alta o edición de un fardo en Hoja de cálculo."""
+
+    id: int
+    creado_en: str
+    pesaje_id: int
+    accion: str
+    campo: str
+    valor_anterior: str
+    valor_nuevo: str
+    nro_fardo: str
+    operario: str
+    detalle: str
+
+
+@dataclass
 class MaestroItem:
     """Registro de tabla maestro (cliente, color, denier, corte)."""
 

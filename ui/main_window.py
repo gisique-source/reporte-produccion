@@ -10,6 +10,7 @@ from config import PORT, SYNC_INTERVAL_S, SYNC_TOKEN, UI_REFRESH_MS
 from db import PesajeDatabase
 from serial_reader import SerialWeightReader
 from sync import SyncWorker
+from ui.auditoria_cambios_view import AuditoriaCambiosView
 from ui.auditoria_view import AuditoriaSyncView
 from ui.etiqueta_editor_view import EtiquetaEditorView
 from ui.hoja_dia_view import HojaDiaView
@@ -67,9 +68,9 @@ class PrecixApp(tk.Tk):
             textvariable=self.var_device,
             font=("Segoe UI", 10, "bold"),
             fg="#ffffff",
-            bg="#555555",
+            bg="#9ca3af",
             activeforeground="#ffffff",
-            activebackground="#666666",
+            activebackground="#6b7280",
             relief=tk.FLAT,
             padx=12,
             pady=5,
@@ -119,7 +120,13 @@ class PrecixApp(tk.Tk):
             self.nb, self.db, on_open_day=self._abrir_dia
         )
         self.view_reportes = ReportesView(self.nb, self.db)
-        self.view_auditoria = AuditoriaSyncView(self.nb, self.db, sync=self.sync)
+        self.tab_auditoria = ttk.Notebook(self.nb)
+        self.view_auditoria = AuditoriaSyncView(
+            self.tab_auditoria, self.db, sync=self.sync
+        )
+        self.view_aud_cambios = AuditoriaCambiosView(self.tab_auditoria, self.db)
+        self.tab_auditoria.add(self.view_auditoria, text="  Sync nube  ")
+        self.tab_auditoria.add(self.view_aud_cambios, text="  Cambios de hoja  ")
         self.view_etiqueta = EtiquetaEditorView(self.nb)
         self.view_maestros = MaestrosView(
             self.nb,
@@ -127,19 +134,20 @@ class PrecixApp(tk.Tk):
             on_change=self._on_maestros_change,
         )
 
-        self.nb.add(self.view_pesaje, text="  Pesaje / Imprimir  ")
-        self.nb.add(self.view_hoja, text="  Hoja  ")
+        self.nb.add(self.view_pesaje, text="  Pesaje  ")
+        self.nb.add(self.view_hoja, text="  Hoja de cálculo  ")
         self.nb.add(self.view_mes, text="  Resumen mensual  ")
         self.nb.add(self.view_reportes, text="  Reportes  ")
-        self.nb.add(self.view_auditoria, text="  Auditoría  ")
+        self.nb.add(self.tab_auditoria, text="  Auditoría  ")
         self.nb.add(self.view_etiqueta, text="  Etiqueta  ")
         self.nb.add(self.view_maestros, text="  Maestros  ")
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
     def _on_tab_changed(self, _event=None) -> None:
         try:
-            if self.nb.select() == str(self.view_auditoria):
+            if self.nb.select() == str(self.tab_auditoria):
                 self.view_auditoria.refrescar()
+                self.view_aud_cambios.refrescar()
         except tk.TclError:
             pass
 
@@ -151,6 +159,7 @@ class PrecixApp(tk.Tk):
         self.view_hoja.refrescar()
         self.view_mes.refrescar()
         self.view_reportes.refrescar()
+        self.view_aud_cambios.refrescar()
         self._refresh_sync_badge()
 
     def _abrir_dia(self, dia: date) -> None:
@@ -258,7 +267,7 @@ class PrecixApp(tk.Tk):
             text="Cerrar",
             font=("Segoe UI", 10, "bold"),
             fg="#fff",
-            bg="#555",
+            bg=Theme.MUTED,
             relief=tk.FLAT,
             padx=12,
             pady=6,
@@ -297,41 +306,21 @@ class PrecixApp(tk.Tk):
         self.after(5000, self._refresh_sync_badge)
 
     def _on_print_key(self, _event=None):
-        if self._en_pesaje():
-            self.view_pesaje.imprimir()
-            return "break"
         if self._en_hoja():
             self.view_hoja.imprimir()
             return "break"
         return None
 
     def _on_space_key(self, _event=None):
-        if self._en_pesaje():
-            if self.view_pesaje.focus_es_entrada():
-                return None
-            self.view_pesaje.tomar_foto()
-            return "break"
-        if self._en_hoja():
-            if self.view_hoja.focus_es_entrada():
-                return None
-            self.view_hoja.tomar_foto()
-            return "break"
+        if self._en_hoja() and self.view_hoja.focus_es_entrada():
+            return None
         return None
 
     def _on_escape_key(self, _event=None):
-        if self._en_pesaje():
-            self.view_pesaje.reanudar_medicion()
-            return "break"
         if self._en_hoja():
             self.view_hoja.reanudar_medicion()
             return "break"
         return None
-
-    def _en_pesaje(self) -> bool:
-        try:
-            return self.nb.select() == str(self.view_pesaje)
-        except tk.TclError:
-            return False
 
     def _en_hoja(self) -> bool:
         try:

@@ -12,17 +12,17 @@ from db import PesajeDatabase, nombre_mes
 from models import ResumenDia
 from ui.widgets import Theme
 
-# Paleta corporativa del dashboard (alineada al tema oscuro de la app)
+# Paleta del dashboard (alineada al tema claro)
 _BG = Theme.BG
-_PANEL = "#1e2430"
-_CARD = "#252d3d"
-_BORDER = "#323c50"
-_ACCENT = "#3b82f6"
-_ACCENT2 = "#22c55e"
-_WARN = "#f59e0b"
-_MUTED = "#94a3b8"
-_FG = "#f1f5f9"
-_GRID = "#334155"
+_PANEL = Theme.PANEL
+_CARD = Theme.TREE_HEAD
+_BORDER = Theme.BORDER
+_ACCENT = Theme.ACCENT
+_ACCENT2 = Theme.ST_COLOR
+_WARN = Theme.US_COLOR
+_MUTED = Theme.MUTED
+_FG = Theme.FG
+_GRID = "#c5d0dc"
 
 
 class ResumenMesView(tk.Frame):

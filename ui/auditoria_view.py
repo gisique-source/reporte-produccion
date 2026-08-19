@@ -153,16 +153,16 @@ class AuditoriaSyncView(tk.Frame):
         style = ttk.Style()
         style.configure(
             "Aud.Treeview",
-            background="#2a2a2a",
+            background=Theme.TREE_BG,
             foreground=Theme.FG,
-            fieldbackground="#2a2a2a",
+            fieldbackground=Theme.TREE_BG,
             rowheight=26,
             font=("Segoe UI", 9),
         )
         style.configure(
             "Aud.Treeview.Heading",
-            background="#111",
-            foreground="#fff",
+            background=Theme.TREE_HEAD,
+            foreground=Theme.TREE_HEAD_FG,
             font=("Segoe UI", 9, "bold"),
         )
 
@@ -184,9 +184,9 @@ class AuditoriaSyncView(tk.Frame):
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
 
-        self.tree.tag_configure("ok", foreground="#2ecc71")
-        self.tree.tag_configure("err", foreground="#e74c3c")
-        self.tree.tag_configure("dup", foreground="#f1c40f")
+        self.tree.tag_configure("ok", foreground=Theme.ST_COLOR)
+        self.tree.tag_configure("err", foreground=Theme.ERR_COLOR)
+        self.tree.tag_configure("dup", foreground=Theme.US_COLOR)
 
     def _rango_rapido(self, dias: int) -> None:
         hoy = date.today()

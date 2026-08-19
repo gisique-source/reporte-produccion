@@ -15,6 +15,7 @@ from config import (
 )
 from models import DatosEtiqueta, RegistroPesaje, ResumenDia
 from audit_store import SCHEMA_SYNC_AUDITORIA, SyncAuditMixin
+from audit_pesaje import SCHEMA_PESAJE_AUDITORIA, PesajeAuditMixin
 
 try:
     from catalog import CatalogoMaestros
@@ -103,7 +104,7 @@ def nombre_mes(month: int) -> str:
     return _MESES_NOMBRE[month]
 
 
-class PesajeDatabase(SyncAuditMixin):
+class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin):
     """Acceso thread-safe a pesajes.db."""
 
     def __init__(self, path: str = DB_PATH) -> None:
@@ -122,6 +123,7 @@ class PesajeDatabase(SyncAuditMixin):
             with self._connect() as conn:
                 conn.executescript(_SCHEMA)
                 conn.executescript(SCHEMA_SYNC_AUDITORIA)
+                conn.executescript(SCHEMA_PESAJE_AUDITORIA)
                 self._migrate(conn)
 
     @staticmethod
@@ -134,12 +136,78 @@ class PesajeDatabase(SyncAuditMixin):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pesajes_activo ON pesajes(activo)"
         )
+        try:
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pesajes_lote_fardo
+                ON pesajes (lote COLLATE NOCASE, CAST(nro_fardo AS INTEGER))
+                """
+            )
+        except sqlite3.IntegrityError:
+            # Duplicados históricos: la validación en insertar/actualizar igual aplica.
+            pass
         conn.commit()
+
+    def existe_fardo_en_lote(
+        self,
+        lote: str,
+        nro_fardo: str,
+        *,
+        excluir_id: Optional[int] = None,
+    ) -> bool:
+        """True si ya hay un fardo con ese Nº en el mismo lote (incluye ocultos)."""
+        with self._lock:
+            with self._connect() as conn:
+                return self._existe_fardo_en_lote(
+                    conn, lote, nro_fardo, excluir_id=excluir_id
+                )
+
+    @staticmethod
+    def _existe_fardo_en_lote(
+        conn: sqlite3.Connection,
+        lote: str,
+        nro_fardo: str,
+        *,
+        excluir_id: Optional[int] = None,
+    ) -> bool:
+        lote = (lote or "").strip()
+        nro = str(nro_fardo or "").strip()
+        if not lote or not nro:
+            return False
+        sql = """
+            SELECT id FROM pesajes
+            WHERE lote = ? COLLATE NOCASE
+              AND CAST(nro_fardo AS INTEGER) = CAST(? AS INTEGER)
+              AND nro_fardo GLOB '[0-9]*'
+        """
+        params: list[object] = [lote, nro]
+        if excluir_id is not None:
+            sql += " AND id != ?"
+            params.append(int(excluir_id))
+        row = conn.execute(sql + " LIMIT 1", params).fetchone()
+        return row is not None
+
+    def _asegurar_fardo_unico(
+        self,
+        conn: sqlite3.Connection,
+        lote: str,
+        nro_fardo: str,
+        *,
+        excluir_id: Optional[int] = None,
+    ) -> None:
+        if self._existe_fardo_en_lote(
+            conn, lote, nro_fardo, excluir_id=excluir_id
+        ):
+            raise ValueError(
+                f"Ya existe el fardo {str(nro_fardo).strip()} en el lote "
+                f"{(lote or '').strip()}. No pueden repetirse en el mismo lote."
+            )
 
     def insertar(self, datos: DatosEtiqueta, fecha_hora: Optional[str] = None) -> int:
         fh = fecha_hora or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock:
             with self._connect() as conn:
+                self._asegurar_fardo_unico(conn, datos.lote, datos.nro_fardo)
                 cur = conn.execute(
                     """
                     INSERT INTO pesajes (
@@ -260,6 +328,23 @@ class PesajeDatabase(SyncAuditMixin):
         val = row["m"] if row else None
         return int(val) if val is not None else 0
 
+    def ultimo_nro_fardo_antes(self, dia: date) -> int:
+        """Máximo Nº de fardo anterior a ``dia`` (p. ej. correlativo del día previo)."""
+        inicio = dia.strftime("%Y-%m-%d 00:00:00")
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT MAX(CAST(nro_fardo AS INTEGER)) AS m
+                    FROM pesajes
+                    WHERE fecha_hora < ?
+                      AND nro_fardo GLOB '[0-9]*'
+                    """,
+                    (inicio,),
+                ).fetchone()
+        val = row["m"] if row else None
+        return int(val) if val is not None else 0
+
     def siguiente_nro_fardo(
         self, modo: Optional[str] = None, *, dia: Optional[date] = None
     ) -> int:
@@ -326,6 +411,9 @@ class PesajeDatabase(SyncAuditMixin):
         """Modifica un registro existente (no borra)."""
         with self._lock:
             with self._connect() as conn:
+                self._asegurar_fardo_unico(
+                    conn, datos.lote, datos.nro_fardo, excluir_id=registro_id
+                )
                 cur = conn.execute(
                     """
                     UPDATE pesajes SET

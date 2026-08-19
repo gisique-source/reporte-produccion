@@ -88,16 +88,16 @@ class BulkPasteDialog(tk.Toplevel):
         style = ttk.Style(self)
         style.configure(
             "Bulk.Treeview",
-            background="#2a2a2a",
+            background=Theme.TREE_BG,
             foreground=Theme.FG,
-            fieldbackground="#2a2a2a",
+            fieldbackground=Theme.TREE_BG,
             rowheight=24,
             font=("Segoe UI", 9),
         )
         style.configure(
             "Bulk.Treeview.Heading",
-            background="#111",
-            foreground="#fff",
+            background=Theme.TREE_HEAD,
+            foreground=Theme.TREE_HEAD_FG,
             font=("Segoe UI", 9, "bold"),
         )
         style.map("Bulk.Treeview", background=[("selected", Theme.ACCENT)])

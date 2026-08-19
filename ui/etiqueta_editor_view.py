@@ -123,7 +123,7 @@ class EtiquetaEditorView(tk.Frame):
             bg=Theme.PANEL,
         ).pack(anchor="w", padx=10, pady=(8, 0))
 
-        self.canvas = tk.Canvas(left, bg="#e8e8e8", highlightthickness=0)
+        self.canvas = tk.Canvas(left, bg=Theme.BG, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.canvas.bind("<Button-1>", self._on_down)
         self.canvas.bind("<B1-Motion>", self._on_drag)

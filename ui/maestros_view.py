@@ -161,15 +161,15 @@ class MaestrosView(tk.Frame):
         style = ttk.Style()
         style.configure(
             "Mae.Treeview",
-            background="#2a2a2a",
+            background=Theme.TREE_BG,
             foreground=Theme.FG,
-            fieldbackground="#2a2a2a",
+            fieldbackground=Theme.TREE_BG,
             rowheight=26,
         )
         style.configure(
             "Mae.Treeview.Heading",
-            background="#111",
-            foreground="#fff",
+            background=Theme.TREE_HEAD,
+            foreground=Theme.TREE_HEAD_FG,
             font=("Segoe UI", 10, "bold"),
         )
 

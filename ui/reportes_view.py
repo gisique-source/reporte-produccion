@@ -140,16 +140,16 @@ class ReportesView(tk.Frame):
         style = ttk.Style()
         style.configure(
             "Rep.Treeview",
-            background="#2a2a2a",
+            background=Theme.TREE_BG,
             foreground=Theme.FG,
-            fieldbackground="#2a2a2a",
+            fieldbackground=Theme.TREE_BG,
             rowheight=24,
             font=("Segoe UI", 9),
         )
         style.configure(
             "Rep.Treeview.Heading",
-            background="#111",
-            foreground="#fff",
+            background=Theme.TREE_HEAD,
+            foreground=Theme.TREE_HEAD_FG,
             font=("Segoe UI", 9, "bold"),
         )
 

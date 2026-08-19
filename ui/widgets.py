@@ -1,4 +1,4 @@
-"""Componentes de UI reutilizables (tema industrial oscuro)."""
+"""Componentes de UI reutilizables (tema industrial claro)."""
 
 from __future__ import annotations
 
@@ -7,17 +7,28 @@ from tkinter import ttk
 
 
 class Theme:
-    BG = "#1a1a1a"
-    PANEL = "#242424"
-    FG = "#f0f0f0"
-    ACCENT = "#2d6cdf"
-    ST_COLOR = "#2ecc71"
-    US_COLOR = "#f1c40f"
-    ERR_COLOR = "#e74c3c"
-    MUTED = "#888888"
-    INPUT_BG = "#2e2e2e"
-    BTN_BG = "#27ae60"
-    BTN_ACTIVE = "#2ecc71"
+    BG = "#f3f5f8"
+    PANEL = "#ffffff"
+    FG = "#1a2332"
+    ACCENT = "#1d4ed8"
+    ST_COLOR = "#15803d"
+    US_COLOR = "#b45309"
+    ERR_COLOR = "#b91c1c"
+    MUTED = "#5c6b7a"
+    INPUT_BG = "#ffffff"
+    BTN_BG = "#15803d"
+    BTN_ACTIVE = "#16a34a"
+    TREE_BG = "#ffffff"
+    TREE_HEAD = "#e8eef6"
+    TREE_HEAD_FG = "#1a2332"
+    BORDER = "#d0d7de"
+    CARD_TOTAL = "#eef1f5"
+    CARD_BRUTO = "#fde8e8"
+    CARD_NETO = "#e7f6ec"
+    ROW_LAST = "#dbeafe"
+    ROW_NEXT = "#dcfce7"
+    ROW_DIRTY = "#fff3b0"
+    ROW_SAVED = "#ffffff"
 
 
 def field_label(parent: tk.Widget, text: str) -> tk.Label:
@@ -45,7 +56,9 @@ def text_entry(
         fg=Theme.FG,
         bg=Theme.INPUT_BG,
         insertbackground=Theme.FG,
-        relief=tk.FLAT,
+        relief=tk.SOLID,
+        bd=1,
+        highlightthickness=0,
         width=width,
     )
     if readonly:
@@ -63,11 +76,16 @@ def combo_entry(
 ) -> ttk.Combobox:
     style = ttk.Style()
     style.configure(
-        "Dark.TCombobox",
+        "App.TCombobox",
         fieldbackground=Theme.INPUT_BG,
-        background=Theme.INPUT_BG,
+        background=Theme.PANEL,
         foreground=Theme.FG,
         arrowcolor=Theme.FG,
+    )
+    style.map(
+        "App.TCombobox",
+        fieldbackground=[("readonly", Theme.INPUT_BG), ("!readonly", Theme.INPUT_BG)],
+        foreground=[("readonly", Theme.FG), ("!readonly", Theme.FG)],
     )
     return ttk.Combobox(
         parent,
@@ -77,7 +95,7 @@ def combo_entry(
         width=width,
         # normal = escribir a mano + lista; readonly = solo elegir
         state="normal" if editable else "readonly",
-        style="Dark.TCombobox",
+        style="App.TCombobox",
     )
 
 
@@ -120,6 +138,89 @@ def secondary_button(parent: tk.Widget, text: str, command) -> tk.Button:
         cursor="hand2",
         command=command,
     )
+
+
+def confirm_modal(
+    parent: tk.Widget,
+    title: str,
+    message: str,
+    *,
+    ok_text: str = "Confirmar",
+    cancel_text: str = "Cancelar",
+) -> bool:
+    """Modal de confirmación (soft-delete / ediciones)."""
+    top = parent.winfo_toplevel()
+    win = tk.Toplevel(top)
+    win.title(title)
+    win.configure(bg=Theme.PANEL)
+    win.transient(top)
+    win.resizable(False, False)
+    win.grab_set()
+    result = {"ok": False}
+
+    tk.Label(
+        win,
+        text=title,
+        font=("Segoe UI", 13, "bold"),
+        fg=Theme.FG,
+        bg=Theme.PANEL,
+        anchor="w",
+    ).pack(fill=tk.X, padx=20, pady=(16, 6))
+    tk.Label(
+        win,
+        text=message,
+        font=("Segoe UI", 10),
+        fg=Theme.MUTED,
+        bg=Theme.PANEL,
+        justify="left",
+        wraplength=420,
+        anchor="w",
+    ).pack(fill=tk.X, padx=20, pady=(0, 16))
+
+    btns = tk.Frame(win, bg=Theme.PANEL)
+    btns.pack(fill=tk.X, padx=20, pady=(0, 16))
+
+    def _ok() -> None:
+        result["ok"] = True
+        win.destroy()
+
+    def _cancel() -> None:
+        result["ok"] = False
+        win.destroy()
+
+    tk.Button(
+        btns,
+        text=cancel_text,
+        font=("Segoe UI", 10, "bold"),
+        fg=Theme.FG,
+        bg=Theme.TREE_HEAD,
+        relief=tk.FLAT,
+        padx=14,
+        pady=8,
+        cursor="hand2",
+        command=_cancel,
+    ).pack(side=tk.RIGHT, padx=(8, 0))
+    tk.Button(
+        btns,
+        text=ok_text,
+        font=("Segoe UI", 10, "bold"),
+        fg="#ffffff",
+        bg=Theme.ERR_COLOR,
+        relief=tk.FLAT,
+        padx=14,
+        pady=8,
+        cursor="hand2",
+        command=_ok,
+    ).pack(side=tk.RIGHT)
+
+    win.bind("<Escape>", lambda _e: _cancel())
+    win.bind("<Return>", lambda _e: _ok())
+    win.update_idletasks()
+    x = top.winfo_rootx() + (top.winfo_width() - win.winfo_reqwidth()) // 2
+    y = top.winfo_rooty() + (top.winfo_height() - win.winfo_reqheight()) // 3
+    win.geometry(f"+{max(x, 40)}+{max(y, 40)}")
+    top.wait_window(win)
+    return bool(result["ok"])
 
 
 class ScrollableFrame(tk.Frame):
