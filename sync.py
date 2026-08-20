@@ -19,6 +19,7 @@ from config import (
 )
 from db import PesajeDatabase
 from models import RegistroPesaje
+from sync_pull import PullResult, SyncPullClient
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,14 @@ class SyncWorker:
 
     def __init__(self, db: PesajeDatabase) -> None:
         self.db = db
+        self._pull = SyncPullClient(db)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._flush_lock = threading.Lock()
         self.last_error: str = ""
         self.last_ok_at: str = ""
         self.busy = False
+        self.last_pull: Optional[PullResult] = None
 
     def start(self) -> None:
         """Arranca el cron al abrir la app (no depende de un scheduler externo)."""
@@ -83,6 +86,42 @@ class SyncWorker:
         return self._flush_pending(
             continuar_si_falla=continuar_si_falla, vaciar_cola=True
         )
+
+    def pull_now(
+        self,
+        *,
+        desde: Optional[str] = None,
+        hasta: Optional[str] = None,
+        incluir_inactivos: bool = True,
+    ) -> PullResult:
+        """
+        Descarga pesajes (+ maestros si vienen) desde el sistema web.
+        Usa el mismo token/planta que la subida. No corre en paralelo con flush.
+        """
+        if not self._flush_lock.acquire(blocking=False):
+            return PullResult(
+                ok=False,
+                mensaje="Sync ocupado (subida en curso). Reintente en unos segundos.",
+            )
+        self.busy = True
+        try:
+            result = self._pull.restore(
+                desde=desde,
+                hasta=hasta,
+                incluir_inactivos=incluir_inactivos,
+            )
+            self.last_pull = result
+            if not result.ok:
+                self.last_error = result.mensaje
+            else:
+                self.last_error = ""
+                from datetime import datetime
+
+                self.last_ok_at = datetime.now().strftime("%H:%M:%S")
+            return result
+        finally:
+            self.busy = False
+            self._flush_lock.release()
 
     def _run(self) -> None:
         # Primer ciclo al arrancar, luego cada intervalo (cron 5 min).

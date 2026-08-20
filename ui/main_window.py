@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from datetime import date
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from config import PORT, SYNC_INTERVAL_S, SYNC_TOKEN, UI_REFRESH_MS
 from db import PesajeDatabase
@@ -20,8 +21,15 @@ from ui.reportes_view import ReportesView
 from ui.resumen_mes_view import ResumenMesView
 from ui.widgets import Theme
 
+try:
+    from tkinterdnd2 import TkinterDnD as _TkinterDnD
 
-class PrecixApp(tk.Tk):
+    _TkBase = _TkinterDnD.Tk
+except ImportError:  # pragma: no cover
+    _TkBase = tk.Tk
+
+
+class PrecixApp(_TkBase):
     def __init__(self) -> None:
         super().__init__()
         self.title("Precix-Weight — Gexim Extrusora")
@@ -45,6 +53,7 @@ class PrecixApp(tk.Tk):
         self.sync.start()
         self.after(200, self._refresh_device_light)
         self.after(5000, self._refresh_sync_badge)
+        self.after(800, self._maybe_offer_restore)
 
     def _build(self) -> None:
         header = tk.Frame(self, bg=Theme.BG)
@@ -150,6 +159,58 @@ class PrecixApp(tk.Tk):
                 self.view_aud_cambios.refrescar()
         except tk.TclError:
             pass
+
+    def _maybe_offer_restore(self) -> None:
+        """Si la DB local está vacía y hay token, ofrece traer historial del core."""
+        if not SYNC_TOKEN:
+            return
+        try:
+            if self.db.contar_pesajes() > 0:
+                return
+        except Exception:  # noqa: BLE001
+            return
+        if not messagebox.askyesno(
+            "Base de datos vacía",
+            "No hay pesajes en esta PC.\n\n"
+            "¿Descargar el historial de esta planta desde el sistema web?\n\n"
+            "(Requiere el endpoint GET …/pesajes/export — ver docs/SYNC_PULL_API.md)",
+        ):
+            return
+        self.lbl_sync.config(text="⬇ Restaurando…", fg=Theme.US_COLOR)
+
+        def _work() -> None:
+            try:
+                result = self.sync.pull_now()
+            except Exception as exc:  # noqa: BLE001
+                from sync_pull import PullResult
+
+                result = PullResult(ok=False, mensaje=str(exc))
+            self.after(0, lambda: self._fin_restore_arranque(result))
+
+        threading.Thread(target=_work, name="BootPull", daemon=True).start()
+
+    def _fin_restore_arranque(self, result: object) -> None:
+        self._refresh_sync_badge()
+        if not getattr(result, "ok", False):
+            messagebox.showwarning(
+                "Restauración",
+                "No se pudo traer datos desde la nube.\n\n"
+                f"{getattr(result, 'mensaje', '')}\n\n"
+                "Puede reintentar en Auditoría → Traer desde nube.",
+            )
+            return
+        self.view_hoja.refrescar()
+        self.view_mes.refrescar()
+        self.view_auditoria.refrescar()
+        self.view_pesaje.refrescar_maestros()
+        self.view_hoja.refrescar_maestros()
+        messagebox.showinfo(
+            "Restauración",
+            "Historial restaurado desde el sistema web.\n\n"
+            f"Insertados: {getattr(result, 'insertados', 0)}\n"
+            f"Actualizados: {getattr(result, 'actualizados', 0)}\n"
+            f"Maestros: {getattr(result, 'maestros_ok', 0)}",
+        )
 
     def _on_maestros_change(self) -> None:
         self.view_pesaje.refrescar_maestros()

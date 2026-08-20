@@ -25,8 +25,8 @@ _HEADER_PATTERNS: dict[str, re.Pattern[str]] = {
     "cliente": re.compile(r"^clientes?$", re.I),
     "lote": re.compile(r"^lotes?$", re.I),
     "color": re.compile(r"^colou?rs?$", re.I),
-    "dn": re.compile(r"^(dn|denier|den)$", re.I),
-    "corte": re.compile(r"^(corte|cortes?|mm)$", re.I),
+    "dn": re.compile(r"^(dn|denier|den)(:)?$", re.I),
+    "corte": re.compile(r"^(corte(\s*mm)?|cortes?|mm)$", re.I),
     "total": re.compile(r"^(p\.?\s*)?total(es)?$", re.I),
     "tara_c": re.compile(r"^tara\s*(carr(eta)?|c\.?)$", re.I),
     "tara_f": re.compile(r"^tara\s*(fardo|f\.?)$", re.I),
@@ -34,6 +34,7 @@ _HEADER_PATTERNS: dict[str, re.Pattern[str]] = {
     "neto": re.compile(r"^(p\.?\s*)?neto$", re.I),
     "hora": re.compile(r"^(hora|time|hh:mm)", re.I),
     "operario": re.compile(r"^(operario|operador|op\.?)$", re.I),
+    "beteado": re.compile(r"^beteado$", re.I),
 }
 
 # Orden por defecto si no hay encabezado (compatible con hoja / Excel típico)
@@ -59,6 +60,32 @@ _MAESTRO_KEYS: dict[str, MaestroTipo] = {
     "dn": "denier",
     "corte": "corte",
     "operario": "operario",
+}
+
+_HEADER_NOISE = {
+    "fardo",
+    "cliente",
+    "clientes",
+    "lote",
+    "lotes",
+    "color",
+    "dn",
+    "denier",
+    "corte",
+    "corte mm",
+    "p total",
+    "total",
+    "tara carreta",
+    "tara fardo",
+    "p bruto",
+    "bruto",
+    "p neto",
+    "neto",
+    "hora",
+    "operario",
+    "beteado",
+    "verificacion",
+    "td",
 }
 
 
@@ -105,6 +132,17 @@ def resolver_maestro(
     for c in candidatos:
         if normalizar_texto(c) == n:
             return c, crudo
+
+    # 1b) números equivalentes (4 vs 4.0 / 4,0)
+    if re.fullmatch(r"\d+([.,]\d+)?", crudo):
+        try:
+            num = float(crudo.replace(",", "."))
+            for c in candidatos:
+                if re.fullmatch(r"\d+([.,]\d+)?", c.strip()):
+                    if abs(float(c.strip().replace(",", ".")) - num) < 1e-9:
+                        return c, crudo
+        except ValueError:
+            pass
 
     # 2) regex flexible (espacios / guiones)
     pat = _patron_flexible(n)
@@ -240,6 +278,24 @@ def parsear_pegado(
     rows = _split_clipboard(texto)
     if not rows:
         return ResultadoParseo([], {}, "Portapapeles vacío.")
+    return parsear_matriz(
+        rows,
+        catalogo,
+        tara_c_default=tara_c_default,
+        tara_f_default=tara_f_default,
+    )
+
+
+def parsear_matriz(
+    rows: list[list[str]],
+    catalogo: CatalogoMaestros,
+    *,
+    tara_c_default: float = TARA_CARRETA_KG,
+    tara_f_default: float = TARA_FARDO_KG,
+) -> ResultadoParseo:
+    """Parsea una matriz de celdas (pegado o Excel)."""
+    if not rows:
+        return ResultadoParseo([], {}, "Sin filas.")
 
     header_map = _map_headers(rows[0])
     if header_map:
@@ -268,10 +324,12 @@ def parsear_pegado(
             return cells[idx].strip()
 
         fardo = get("fardo")
-        # Saltar filas de totales / vacías
         if not fardo and not get("cliente") and not get("lote"):
             continue
         if re.search(r"total", fardo, re.I) and not re.search(r"\d", fardo):
+            continue
+        # Requiere Nº fardo numérico (evita filas de leyenda / segunda cabecera)
+        if not re.search(r"\d", fardo):
             continue
 
         total = parse_float(get("total"))
@@ -289,6 +347,27 @@ def parsear_pegado(
         dn_raw = get("dn")
         corte_raw = get("corte")
         op_raw = get("operario")
+
+        # Plantilla vacía o ruido de hoja (segunda cabecera / totales)
+        if not cli_raw and not get("lote") and total <= 0 and bruto <= 0:
+            continue
+        if normalizar_texto(cli_raw) in _HEADER_NOISE:
+            continue
+        if normalizar_texto(get("lote")) in _HEADER_NOISE:
+            continue
+        if not cli_raw or not get("lote"):
+            continue
+        # Pesos en 0: se aceptan si hay cliente+lote (fórmulas Excel sin cache)
+        # Solo se descarta si además faltan color/dn/corte (fila claramente vacía)
+        if (
+            total <= 0
+            and bruto <= 0
+            and neto <= 0
+            and not col_raw
+            and not dn_raw
+            and not corte_raw
+        ):
+            continue
 
         cli_ok, cli_prop = resolver_maestro(cli_raw, cats["cliente"])
         col_ok, col_prop = resolver_maestro(col_raw, cats["color"])
@@ -336,7 +415,7 @@ def parsear_pegado(
         )
         if clave in seen:
             f.errores.append(
-                f"Fardo {nro} repetido en el lote {lote} (mismo pegado)"
+                f"Fardo {nro} repetido en el lote {lote} (mismo lote de carga)"
             )
         else:
             seen[clave] = 1

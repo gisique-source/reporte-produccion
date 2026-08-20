@@ -286,6 +286,7 @@ Al implementar la API, deja listo el campo `activo` y un upsert; luego se amplia
 - [ ] Sync de soft-delete (`activo: 0`)
 - [ ] Sync de maestros
 - [ ] `GET` consulta por fecha / lote para dashboards
+- [ ] **Restauración planta:** `GET /api/v1/precix/pesajes/export` — ver `docs/SYNC_PULL_API.md` (cliente ya listo)
 - [ ] Webhook inverso (nube → planta) — no requerido por el cliente actual
 
 ---

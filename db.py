@@ -16,6 +16,7 @@ from config import (
 from models import DatosEtiqueta, RegistroPesaje, ResumenDia
 from audit_store import SCHEMA_SYNC_AUDITORIA, SyncAuditMixin
 from audit_pesaje import SCHEMA_PESAJE_AUDITORIA, PesajeAuditMixin
+from restore_store import RestoreStoreMixin
 
 try:
     from catalog import CatalogoMaestros
@@ -104,7 +105,7 @@ def nombre_mes(month: int) -> str:
     return _MESES_NOMBRE[month]
 
 
-class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin):
+class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
     """Acceso thread-safe a pesajes.db."""
 
     def __init__(self, path: str = DB_PATH) -> None:
@@ -161,6 +162,29 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin):
                 return self._existe_fardo_en_lote(
                     conn, lote, nro_fardo, excluir_id=excluir_id
                 )
+
+    def obtener_por_lote_fardo(
+        self, lote: str, nro_fardo: str
+    ) -> Optional[RegistroPesaje]:
+        """Busca el registro activo (o el primero) por lote + Nº fardo."""
+        lote = (lote or "").strip()
+        nro = str(nro_fardo or "").strip()
+        if not lote or not nro:
+            return None
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT * FROM pesajes
+                    WHERE lote = ? COLLATE NOCASE
+                      AND CAST(nro_fardo AS INTEGER) = CAST(? AS INTEGER)
+                      AND nro_fardo GLOB '[0-9]*'
+                    ORDER BY activo DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (lote, nro),
+                ).fetchone()
+        return self._row_to_registro(row) if row else None
 
     @staticmethod
     def _existe_fardo_en_lote(

@@ -1,6 +1,14 @@
 __pycache__/
+*.py[cod]
+*$py.class
 *.db
 ui/__pycache__/
 .env
 .env.local
 .env.*.local
+
+# Entornos virtuales (nunca versionar)
+venv/
+.venv/
+env/
+ENV/

@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Optional
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from config import SYNC_API_URL, SYNC_INTERVAL_S, SYNC_PLANTA, SYNC_TOKEN
+from config import (
+    SYNC_API_URL,
+    SYNC_INTERVAL_S,
+    SYNC_PLANTA,
+    SYNC_PULL_URL,
+    SYNC_TOKEN,
+)
 from db import PesajeDatabase, format_fecha_editable, parse_fecha_produccion
 from models import RegistroAuditoriaSync
 from ui.widgets import Theme, secondary_button, text_entry
@@ -46,6 +52,7 @@ class AuditoriaSyncView(tk.Frame):
         self.db = db
         self.sync = sync
         self._subiendo = False
+        self._bajando = False
         today = date.today()
         self.var_desde = tk.StringVar(value=format_fecha_editable(today - timedelta(days=7)))
         self.var_hasta = tk.StringVar(value=format_fecha_editable(today))
@@ -82,6 +89,21 @@ class AuditoriaSyncView(tk.Frame):
             command=self.subir_faltantes,
         )
         self.btn_subir.pack(side=tk.RIGHT, padx=(8, 0))
+        self.btn_bajar = tk.Button(
+            head,
+            text="⬇  Traer desde nube",
+            font=("Segoe UI", 11, "bold"),
+            fg="#ffffff",
+            bg="#0f766e",
+            activeforeground="#ffffff",
+            activebackground="#0d9488",
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            cursor="hand2",
+            command=self.traer_desde_nube,
+        )
+        self.btn_bajar.pack(side=tk.RIGHT, padx=(8, 0))
         secondary_button(head, "Actualizar", self.refrescar).pack(side=tk.RIGHT)
 
         tk.Label(
@@ -206,8 +228,8 @@ class AuditoriaSyncView(tk.Frame):
         if self.sync is None:
             messagebox.showwarning("Auditoría", "Sync no está disponible.")
             return
-        if self._subiendo or self.sync.busy:
-            messagebox.showinfo("Auditoría", "Ya hay una subida en curso.")
+        if self._subiendo or self._bajando or self.sync.busy:
+            messagebox.showinfo("Auditoría", "Ya hay una sincronización en curso.")
             return
         if not SYNC_TOKEN:
             messagebox.showwarning(
@@ -228,6 +250,7 @@ class AuditoriaSyncView(tk.Frame):
             return
         self._subiendo = True
         self.btn_subir.config(state=tk.DISABLED, text="Subiendo…")
+        self.btn_bajar.config(state=tk.DISABLED)
         self.var_cfg.set(f"Subiendo {pend} pendiente(s)…")
 
         def _work() -> None:
@@ -239,9 +262,61 @@ class AuditoriaSyncView(tk.Frame):
 
         threading.Thread(target=_work, name="AuditManualSync", daemon=True).start()
 
+    def traer_desde_nube(self) -> None:
+        if self.sync is None:
+            messagebox.showwarning("Auditoría", "Sync no está disponible.")
+            return
+        if self._subiendo or self._bajando or self.sync.busy:
+            messagebox.showinfo("Auditoría", "Ya hay una sincronización en curso.")
+            return
+        if not SYNC_TOKEN:
+            messagebox.showwarning(
+                "Auditoría",
+                "Falta PRECIX_SYNC_TOKEN. Configure el token en las variables de entorno.",
+            )
+            return
+        desde_ui, hasta_ui = self._parse_rango()
+        todo = messagebox.askyesnocancel(
+            "Traer desde la nube",
+            "¿Descargar todos los pesajes de esta planta desde el sistema web?\n\n"
+            "Sí = historial completo de la planta\n"
+            "No = solo el rango Desde/Hasta de los filtros\n"
+            "Cancelar = no hacer nada\n\n"
+            "Los registros se insertan/actualizan en SQLite local "
+            "(clave id_local o lote+nº fardo) y quedan marcados como ya sincronizados.",
+        )
+        if todo is None:
+            return
+        desde = None if todo else desde_ui
+        hasta = None if todo else hasta_ui
+        if not todo and (not desde or not hasta):
+            messagebox.showwarning(
+                "Auditoría",
+                "Indique un rango Desde/Hasta válido (DD/MM/YYYY) o elija Sí para todo.",
+            )
+            return
+
+        self._bajando = True
+        self.btn_bajar.config(state=tk.DISABLED, text="Descargando…")
+        self.btn_subir.config(state=tk.DISABLED)
+        rango_txt = "todo el historial" if todo else f"{desde} → {hasta}"
+        self.var_cfg.set(f"Descargando desde nube ({rango_txt})…")
+
+        def _work() -> None:
+            try:
+                result = self.sync.pull_now(desde=desde, hasta=hasta)
+            except Exception as exc:  # noqa: BLE001
+                from sync_pull import PullResult
+
+                result = PullResult(ok=False, mensaje=str(exc))
+            self.after(0, lambda: self._fin_bajada(result))
+
+        threading.Thread(target=_work, name="AuditManualPull", daemon=True).start()
+
     def _fin_subida(self, result: dict) -> None:
         self._subiendo = False
         self.btn_subir.config(state=tk.NORMAL, text="⬆  Subir datos faltantes")
+        self.btn_bajar.config(state=tk.NORMAL)
         self.refrescar()
         if result.get("_exc"):
             messagebox.showerror("Auditoría", f"Error al subir:\n{result['_exc']}")
@@ -254,6 +329,32 @@ class AuditoriaSyncView(tk.Frame):
             f"Enviados OK: {ok}\nErrores: {err}\nPendientes restantes: {rest}",
         )
 
+    def _fin_bajada(self, result: object) -> None:
+        self._bajando = False
+        self.btn_bajar.config(state=tk.NORMAL, text="⬇  Traer desde nube")
+        self.btn_subir.config(state=tk.NORMAL)
+        self.refrescar()
+        ok = bool(getattr(result, "ok", False))
+        msg = str(getattr(result, "mensaje", "") or "")
+        if not ok:
+            messagebox.showerror(
+                "Traer desde nube",
+                f"No se pudo restaurar desde el sistema web.\n\n{msg}\n\n"
+                "Verifique que exista GET /api/v1/precix/pesajes/export "
+                "(ver docs/SYNC_PULL_API.md).",
+            )
+            return
+        messagebox.showinfo(
+            "Traer desde nube",
+            "Restauración completada.\n\n"
+            f"Insertados: {getattr(result, 'insertados', 0)}\n"
+            f"Actualizados: {getattr(result, 'actualizados', 0)}\n"
+            f"Omitidos: {getattr(result, 'omitidos', 0)}\n"
+            f"Maestros: {getattr(result, 'maestros_ok', 0)}\n"
+            f"Páginas: {getattr(result, 'paginas', 0)}\n"
+            f"Total remoto: {getattr(result, 'total_remoto', None) or '—'}",
+        )
+
     def refrescar(self) -> None:
         tok = "token OK" if SYNC_TOKEN else "sin token"
         cada = (
@@ -264,7 +365,8 @@ class AuditoriaSyncView(tk.Frame):
         pend = self.db.contar_pendientes()
         self.var_cfg.set(
             f"Cron {cada} mientras la app está abierta · {tok} · "
-            f"planta {SYNC_PLANTA} · {pend} pendiente(s) · {SYNC_API_URL}"
+            f"planta {SYNC_PLANTA} · {pend} pendiente(s)\n"
+            f"POST {SYNC_API_URL}  ·  GET {SYNC_PULL_URL}"
         )
 
         filtro = self.var_filtro.get()

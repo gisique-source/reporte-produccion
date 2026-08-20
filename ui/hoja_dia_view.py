@@ -26,6 +26,8 @@ from catalog import normalizar_maestro
 from models import DatosEtiqueta, RegistroPesaje
 from serial_reader import SerialWeightReader
 from ui.bulk_paste_dialog import BulkPasteDialog
+from ui.bulk_file_dialog import BulkFileDialog
+from ui.drop_zone import ExcelPickDialog
 from ui.print_preview_dialog import PrintPreviewDialog
 from ui.row_actions import TreeRowActions
 from ui.searchable_dropdown import SearchableDropdown
@@ -140,6 +142,9 @@ class HojaDiaView(tk.Frame):
         secondary_button(nav, "Pegar Excel", self.abrir_carga_masiva).pack(
             side=tk.LEFT, padx=(10, 0)
         )
+        secondary_button(nav, "Archivo Excel…", self.abrir_carga_archivo).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
 
         # Pie fijo: pesaje compacto + detalle + totales
         foot = tk.Frame(self, bg=Theme.BG)
@@ -160,6 +165,7 @@ class HojaDiaView(tk.Frame):
 
         wrap = tk.Frame(self, bg=Theme.BG)
         wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        self.wrap_tree = wrap
 
         tools = tk.Frame(wrap, bg=Theme.BG)
         tools.pack(fill=tk.X, pady=(0, 4))
@@ -1367,7 +1373,8 @@ class HojaDiaView(tk.Frame):
                 "Carga masiva",
                 "Copie filas desde Excel (Ctrl+C) y luego pulse Pegar Excel o Ctrl+V aquí.\n\n"
                 "Columnas sugeridas: Fardo, Cliente, Lote, Color, Dn, Corte, "
-                "P.Total, Tara Carr., Tara Fardo, P.Bruto, P.Neto, Hora, Operario.",
+                "P.Total, Tara Carr., Tara Fardo, P.Bruto, P.Neto, Hora, Operario.\n\n"
+                "También puede usar «Archivo Excel…» para importar el .xlsm mensual completo.",
             )
             return
         BulkPasteDialog(
@@ -1375,6 +1382,19 @@ class HojaDiaView(tk.Frame):
             self.db,
             self.fecha,
             texto,
+            on_done=self._despues_carga_masiva,
+        )
+
+    def abrir_carga_archivo(self) -> None:
+        ExcelPickDialog(self, on_file=self.abrir_archivo_excel)
+
+    def abrir_archivo_excel(self, path: str) -> None:
+        if not path:
+            return
+        BulkFileDialog(
+            self,
+            self.db,
+            path,
             on_done=self._despues_carga_masiva,
         )
 

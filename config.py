@@ -5,6 +5,32 @@ from __future__ import annotations
 import os
 import serial
 
+# Carga .env local (Linux/dev) sin depender de python-dotenv.
+# No sobrescribe variables ya definidas en el entorno (p. ej. Windows User).
+_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+def _load_dotenv(path: str = _ENV_FILE) -> None:
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if not key or key in os.environ:
+                    continue
+                val = val.strip().strip("'").strip('"')
+                os.environ[key] = val
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
 # ---------------------------------------------------------------------------
 # Puerto serie Precix-Weight
 # ---------------------------------------------------------------------------
@@ -53,6 +79,26 @@ SYNC_PLANTA = (
     or "ATE-EXTRUSORA-1"
 ).strip()
 SYNC_TIMEOUT_S = int(os.environ.get("PRECIX_SYNC_TIMEOUT_S", "10") or "10")
+
+
+def _default_pull_url(push_url: str) -> str:
+    """
+    Deriva GET export desde el POST de subida.
+    .../pesajes  →  .../pesajes/export
+    """
+    base = (push_url or "").rstrip("/")
+    if not base:
+        return "https://example.com/api/v1/precix/pesajes/export"
+    if base.endswith("/export"):
+        return base
+    return f"{base}/export"
+
+
+SYNC_PULL_URL = (
+    os.environ.get("PRECIX_SYNC_PULL_URL") or _default_pull_url(SYNC_API_URL)
+).strip()
+# Página máxima pedida al export (el servidor puede devolver menos)
+SYNC_PULL_PAGE_SIZE = int(os.environ.get("PRECIX_SYNC_PULL_PAGE_SIZE", "500") or "500")
 
 
 def _sync_interval_seconds() -> int:
