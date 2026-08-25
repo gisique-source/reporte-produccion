@@ -175,17 +175,15 @@ class MaestrosView(tk.Frame):
 
         self.tree = ttk.Treeview(
             wrap,
-            columns=("id", "valor", "codigo", "estado"),
+            columns=("valor", "codigo", "estado"),
             show="headings",
             style="Mae.Treeview",
             selectmode="extended",
         )
-        self.tree.heading("id", text="ID")
         self.tree.heading("valor", text="Valor")
         self.tree.heading("codigo", text="Código")
         self.tree.heading("estado", text="Estado")
-        self.tree.column("id", width=50, anchor="center")
-        self.tree.column("valor", width=280, anchor="w")
+        self.tree.column("valor", width=330, anchor="w")
         self.tree.column("codigo", width=100, anchor="center")
         self.tree.column("estado", width=90, anchor="center")
         self.tree.tag_configure("inactivo", foreground="#888")
@@ -237,7 +235,7 @@ class MaestrosView(tk.Frame):
                 "",
                 tk.END,
                 iid=str(m.id),
-                values=(m.id, m.valor, m.codigo, estado),
+                values=(m.valor, m.codigo, estado),
                 tags=tags,
             )
         n_dup = len(self.catalogo.grupos_duplicados(self.tipo, solo_activos=True))

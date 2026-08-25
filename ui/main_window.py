@@ -157,6 +157,8 @@ class PrecixApp(_TkBase):
             if self.nb.select() == str(self.tab_auditoria):
                 self.view_auditoria.refrescar()
                 self.view_aud_cambios.refrescar()
+            elif self.nb.select() == str(self.view_pesaje):
+                self.view_pesaje.al_mostrar()
         except tk.TclError:
             pass
 
@@ -370,11 +372,17 @@ class PrecixApp(_TkBase):
         if self._en_hoja():
             self.view_hoja.imprimir()
             return "break"
+        if self._en_pesaje() and not self.view_pesaje.focus_es_entrada():
+            self.view_pesaje.guardar()
+            return "break"
         return None
 
     def _on_space_key(self, _event=None):
         if self._en_hoja() and self.view_hoja.focus_es_entrada():
             return None
+        if self._en_pesaje() and not self.view_pesaje.focus_es_entrada():
+            self.view_pesaje.guardar()
+            return "break"
         return None
 
     def _on_escape_key(self, _event=None):
@@ -386,6 +394,12 @@ class PrecixApp(_TkBase):
     def _en_hoja(self) -> bool:
         try:
             return self.nb.select() == str(self.view_hoja)
+        except tk.TclError:
+            return False
+
+    def _en_pesaje(self) -> bool:
+        try:
+            return self.nb.select() == str(self.view_pesaje)
         except tk.TclError:
             return False
 

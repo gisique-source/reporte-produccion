@@ -611,11 +611,6 @@ class BulkFileDialog(tk.Toplevel):
                     ok_ins += 1
                 elif v.estado == EstadoImport.MODIFICAR and v.registro_id is not None:
                     self.db.actualizar(v.registro_id, datos)
-                    # Si el Excel trae otra fecha, actualizar timestamp
-                    if datos.fecha_hora_registro:
-                        self._actualizar_fecha_hora(
-                            v.registro_id, datos.fecha_hora_registro
-                        )
                     ok_upd += 1
             except Exception:  # noqa: BLE001
                 errores += 1
@@ -629,20 +624,3 @@ class BulkFileDialog(tk.Toplevel):
         if self.on_done:
             self.on_done()
         self.destroy()
-
-    def _actualizar_fecha_hora(self, registro_id: int, fecha_hora: str) -> None:
-        """Ajusta fecha_hora tras actualizar datos (no expuesto en actualizar())."""
-        try:
-            with self.db._lock:
-                with self.db._connect() as conn:
-                    conn.execute(
-                        """
-                        UPDATE pesajes
-                        SET fecha_hora = ?, estado_sincronizado = 0
-                        WHERE id = ?
-                        """,
-                        (fecha_hora, registro_id),
-                    )
-                    conn.commit()
-        except Exception:  # noqa: BLE001
-            pass

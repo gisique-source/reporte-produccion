@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS sync_auditoria (
 CREATE INDEX IF NOT EXISTS idx_sync_aud_enviado ON sync_auditoria(enviado_en DESC);
 CREATE INDEX IF NOT EXISTS idx_sync_aud_pesaje ON sync_auditoria(pesaje_id);
 CREATE INDEX IF NOT EXISTS idx_sync_aud_ok ON sync_auditoria(ok);
+CREATE INDEX IF NOT EXISTS idx_sync_aud_fecha_pesaje ON sync_auditoria(fecha_hora_pesaje);
 """
 
 
@@ -97,6 +98,8 @@ class SyncAuditMixin:
         solo_ok: Optional[bool] = None,
         desde: Optional[str] = None,
         hasta: Optional[str] = None,
+        desde_pesaje: Optional[str] = None,
+        hasta_pesaje: Optional[str] = None,
         texto: str = "",
     ) -> list[RegistroAuditoriaSync]:
         sql = ["SELECT * FROM sync_auditoria WHERE 1=1"]
@@ -111,6 +114,20 @@ class SyncAuditMixin:
         if hasta:
             sql.append("AND enviado_en <= ?")
             params.append(hasta if " " in hasta else f"{hasta} 23:59:59")
+        if desde_pesaje:
+            sql.append("AND fecha_hora_pesaje >= ?")
+            params.append(
+                desde_pesaje
+                if " " in desde_pesaje
+                else f"{desde_pesaje} 00:00:00"
+            )
+        if hasta_pesaje:
+            sql.append("AND fecha_hora_pesaje <= ?")
+            params.append(
+                hasta_pesaje
+                if " " in hasta_pesaje
+                else f"{hasta_pesaje} 23:59:59"
+            )
         q = (texto or "").strip()
         if q:
             like = f"%{q}%"

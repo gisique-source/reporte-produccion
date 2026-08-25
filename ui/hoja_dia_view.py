@@ -27,10 +27,18 @@ from models import DatosEtiqueta, RegistroPesaje
 from serial_reader import SerialWeightReader
 from ui.bulk_paste_dialog import BulkPasteDialog
 from ui.bulk_file_dialog import BulkFileDialog
+from ui.date_picker import DatePicker
 from ui.drop_zone import ExcelPickDialog
 from ui.print_preview_dialog import PrintPreviewDialog
 from ui.row_actions import TreeRowActions
 from ui.searchable_dropdown import SearchableDropdown
+from ui.time_picker import (
+    HORAS_15MIN,
+    TimePicker,
+    combinar_fecha_hora,
+    parse_hora,
+    snap_hora_15,
+)
 from ui.tree_excel import TreeExcelEditor
 from ui.widgets import Theme, confirm_modal, secondary_button, text_entry
 from utils import normalizar_lote, prefijo_lote
@@ -86,6 +94,7 @@ class HojaDiaView(tk.Frame):
         self.var_dn = tk.StringVar()
         self.var_corte = tk.StringVar()
         self.var_operario = tk.StringVar()
+        self.var_hora = tk.StringVar(value=snap_hora_15(""))
         self.var_ir_fecha = tk.StringVar(value=format_fecha_editable(date.today()))
         self.var_mostrar_ocultos = tk.BooleanVar(value=False)
         self.var_modo_fardo = tk.StringVar(value=self.db.get_modo_fardo())
@@ -128,7 +137,14 @@ class HojaDiaView(tk.Frame):
         nav = tk.Frame(top, bg=Theme.BG)
         nav.pack(side=tk.RIGHT)
         tk.Label(nav, text="Ir a", fg=Theme.MUTED, bg=Theme.BG).pack(side=tk.LEFT)
-        text_entry(nav, self.var_ir_fecha, 11).pack(side=tk.LEFT, padx=(4, 2))
+        self.dp_ir = DatePicker(
+            nav,
+            textvariable=self.var_ir_fecha,
+            value=date.today(),
+            bg=Theme.BG,
+            on_change=lambda _d: None,
+        )
+        self.dp_ir.pack(side=tk.LEFT, padx=(4, 2))
         tk.Button(nav, text="Ir", command=self._ir_a_fecha, width=3).pack(
             side=tk.LEFT, padx=(0, 8)
         )
@@ -239,9 +255,10 @@ class HojaDiaView(tk.Frame):
                 "total",
                 "tara_c",
                 "tara_f",
+                "hora",
                 "operario",
             },
-            combo_cols={"cliente", "color", "dn", "corte", "operario"},
+            combo_cols={"cliente", "color", "dn", "corte", "hora", "operario"},
             on_change=self._on_excel_change,
             normalize=self._excel_normalize,
             can_edit=self._excel_puede_editar,
@@ -364,6 +381,16 @@ class HojaDiaView(tk.Frame):
         col = _lab_col(mid, "Op.")
         self.cb_operario = self._dd_maestro(col, self.var_operario, "operario", 8)
 
+        col = _lab_col(mid, "Hora")
+        self.tp_hora = TimePicker(
+            col,
+            textvariable=self.var_hora,
+            bg=Theme.PANEL,
+            width=5,
+            on_change=self._on_hora_barra,
+        )
+        self.tp_hora.pack(anchor="w")
+
         row_modo = tk.Frame(bar, bg=Theme.PANEL)
         row_modo.pack(fill=tk.X, pady=(6, 0))
         tk.Label(
@@ -436,6 +463,12 @@ class HojaDiaView(tk.Frame):
             bg=Theme.BG,
             anchor="e",
         ).pack(side=tk.RIGHT)
+
+    def _on_hora_barra(self, hhmm: str) -> None:
+        """Actualiza la fila (y persiste si está en edición)."""
+        self._on_maestro_barra("hora", hhmm)
+        if self._editando_id is not None:
+            self._persistir_edicion()
 
     def set_fecha(self, dia: date) -> None:
         self.fecha = dia
@@ -578,6 +611,7 @@ class HojaDiaView(tk.Frame):
             "dn": list(cat.valores_activos("denier")),
             "corte": list(cat.valores_activos("corte")),
             "operario": list(cat.valores_activos("operario")),
+            "hora": list(HORAS_15MIN),
         }
         pairs = (
             (self.cb_cliente, self.var_cliente, "cliente"),
@@ -803,7 +837,7 @@ class HojaDiaView(tk.Frame):
                 f"{(last.tara_fardo if last and last.tara_fardo > 0 else TARA_FARDO_KG):.2f}",
                 "…",
                 "…",
-                "—",
+                snap_hora_15(self.var_hora.get()) if self.var_hora.get() else snap_hora_15(""),
                 last.operario if last else "—",
                 "nuevo",
                 "",
@@ -870,6 +904,9 @@ class HojaDiaView(tk.Frame):
             self._tara_prep = (TARA_CARRETA_KG, TARA_FARDO_KG)
 
         self.var_nro.set(str(nro))
+        hora_now = snap_hora_15("")
+        self.tp_hora.set(hora_now, notify=False)
+        self.var_hora.set(hora_now)
         self.var_modo.set(f"Nuevo fardo #{nro}")
         self.lbl_modo.config(fg=Theme.ST_COLOR)
         self.var_hint.set(
@@ -881,6 +918,7 @@ class HojaDiaView(tk.Frame):
         self._asegurar_prefijo_lote()
         if self.tree.exists("__nuevo__"):
             self.tree.set("__nuevo__", "fardo", str(nro))
+            self.tree.set("__nuevo__", "hora", hora_now)
 
         self._select_tree_iid("__nuevo__")
         self._show_detail(None)
@@ -912,6 +950,9 @@ class HojaDiaView(tk.Frame):
         self.var_dn.set(reg.denier)
         self.var_corte.set(reg.corte)
         self.var_operario.set(reg.operario)
+        hora = self._hora(reg.fecha_hora)
+        self.tp_hora.set(hora, notify=False)
+        self.var_hora.set(hora)
         self.var_bruto.set(f"{reg.peso_bruto:.2f}")
         self.var_neto.set(f"{reg.peso_neto:.2f}")
         if reg.peso_total > 0:
@@ -925,11 +966,21 @@ class HojaDiaView(tk.Frame):
         self.refrescar_maestros()
 
     def _hora(self, fecha_hora: str) -> str:
+        """HH:MM en franjas de 15 min (UI / combo)."""
         try:
             dt = datetime.strptime(fecha_hora, "%Y-%m-%d %H:%M:%S")
-            return dt.strftime("%I:%M %p").lstrip("0").lower()
+            return snap_hora_15(dt.strftime("%H:%M"))
         except ValueError:
-            return fecha_hora[11:16] if len(fecha_hora) >= 16 else ""
+            raw = fecha_hora[11:16] if len(fecha_hora) >= 16 else ""
+            return snap_hora_15(raw) if raw else snap_hora_15("")
+
+    @staticmethod
+    def _hora_etiqueta(hhmm: str) -> str:
+        """Formato de etiqueta: 2:30 pm."""
+        t = parse_hora(hhmm)
+        if t is None:
+            return hhmm
+        return t.strftime("%I:%M %p").lstrip("0").lower()
 
     def _on_select(self, _event=None) -> None:
         if self._ignore_tree_select:
@@ -1284,6 +1335,8 @@ class HojaDiaView(tk.Frame):
     def _excel_normalize(self, key: str, texto: str) -> str:
         if key == "lote":
             return normalizar_lote(texto, anio=self.fecha.year) or texto
+        if key == "hora":
+            return snap_hora_15(texto)
         return texto
 
     def _on_excel_change(self, iid: str, key: str, texto: str) -> None:
@@ -1305,11 +1358,14 @@ class HojaDiaView(tk.Frame):
             "color": self.var_color,
             "dn": self.var_dn,
             "corte": self.var_corte,
+            "hora": self.var_hora,
             "operario": self.var_operario,
         }
         var = mapping.get(key)
         if var is not None:
             var.set(texto)
+        if key == "hora" and hasattr(self, "tp_hora"):
+            self.tp_hora.set(texto, notify=False)
         if key in ("total", "tara_c", "tara_f"):
             self._recalc_fila_excel(iid)
         if iid == "__nuevo__":
@@ -1459,15 +1515,8 @@ class HojaDiaView(tk.Frame):
             )
             return None
 
-        now = datetime.now()
-        # Conservar hora del registro si editamos sin nueva captura
-        reg = next((r for r in self._regs if r.id == self._target_id), None)
-        if reg and permitir_peso_guardado and not self._frozen:
-            fh = reg.fecha_hora
-            hora = self._hora(reg.fecha_hora)
-        else:
-            fh = datetime.combine(self.fecha, now.time()).strftime("%Y-%m-%d %H:%M:%S")
-            hora = now.strftime("%I:%M %p").lstrip("0").lower()
+        hhmm = snap_hora_15(self.var_hora.get())
+        fh = combinar_fecha_hora(self.fecha, hhmm)
 
         return DatosEtiqueta(
             color=self.var_color.get().strip(),
@@ -1483,7 +1532,7 @@ class HojaDiaView(tk.Frame):
             peso_total=float(total),
             tara_carreta=tc,
             tara_fardo=tf,
-            hora=hora,
+            hora=self._hora_etiqueta(hhmm),
             fecha_hora_registro=fh,
         )
 
@@ -1550,7 +1599,7 @@ class HojaDiaView(tk.Frame):
             peso_total=float(reg.peso_total),
             tara_carreta=float(reg.tara_carreta),
             tara_fardo=float(reg.tara_fardo),
-            hora=self._hora(reg.fecha_hora),
+            hora=self._hora_etiqueta(self._hora(reg.fecha_hora)),
             fecha_hora_registro=reg.fecha_hora,
         )
 

@@ -18,6 +18,7 @@ from config import (
 )
 from db import PesajeDatabase, format_fecha_editable, parse_fecha_produccion
 from models import RegistroAuditoriaSync
+from ui.date_picker import DatePicker
 from ui.widgets import Theme, secondary_button, text_entry
 
 if TYPE_CHECKING:
@@ -26,20 +27,21 @@ if TYPE_CHECKING:
 
 class AuditoriaSyncView(tk.Frame):
     COLS = (
-        ("enviado", "Enviado", 140),
+        ("enviado", "Enviado", 130),
+        ("fecha_reg", "Fecha reg.", 130),
         ("estado", "Estado", 70),
         ("http", "HTTP", 50),
         ("fardo", "Fardo", 55),
         ("id_local", "ID local", 65),
-        ("id_remoto", "ID remoto", 220),
+        ("id_remoto", "ID remoto", 200),
         ("lote", "Lote", 100),
-        ("cliente", "Cliente", 140),
+        ("cliente", "Cliente", 130),
         ("color", "Color", 100),
         ("bruto", "Bruto", 70),
         ("neto", "Neto", 70),
-        ("planta", "Planta", 120),
+        ("planta", "Planta", 110),
         ("dup", "Dup.", 45),
-        ("msg", "Detalle", 160),
+        ("msg", "Detalle", 150),
     )
 
     def __init__(
@@ -54,8 +56,13 @@ class AuditoriaSyncView(tk.Frame):
         self._subiendo = False
         self._bajando = False
         today = date.today()
-        self.var_desde = tk.StringVar(value=format_fecha_editable(today - timedelta(days=7)))
-        self.var_hasta = tk.StringVar(value=format_fecha_editable(today))
+        mes_ini = today.replace(day=1)
+        # Enviado: sin filtro por defecto (puede haberse subido otro día)
+        self.var_desde = tk.StringVar(value="")
+        self.var_hasta = tk.StringVar(value="")
+        # Registro: mes actual — para ver si la producción del mes se subió
+        self.var_desde_reg = tk.StringVar(value=format_fecha_editable(mes_ini))
+        self.var_hasta_reg = tk.StringVar(value=format_fecha_editable(today))
         self.var_filtro = tk.StringVar(value="Todas")
         self.var_buscar = tk.StringVar()
         self.var_resumen = tk.StringVar(value="")
@@ -118,20 +125,39 @@ class AuditoriaSyncView(tk.Frame):
         filtros = tk.Frame(self, bg=Theme.PANEL, padx=12, pady=8)
         filtros.pack(fill=tk.X, padx=12, pady=8)
 
+        # Fila 1 — fecha de subida (enviado_en)
+        tk.Label(
+            filtros,
+            text="Fecha de subida (cuándo se envió)",
+            font=("Segoe UI", 9, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 2))
+
         tk.Label(filtros, text="Desde", fg=Theme.MUTED, bg=Theme.PANEL).grid(
-            row=0, column=0, sticky="w"
+            row=1, column=0, sticky="w"
         )
-        text_entry(filtros, self.var_desde, 12).grid(row=1, column=0, sticky="w")
+        self.dp_desde = DatePicker(
+            filtros,
+            textvariable=self.var_desde,
+            allow_empty=True,
+            bg=Theme.PANEL,
+        )
+        self.dp_desde.grid(row=2, column=0, sticky="w")
 
         tk.Label(filtros, text="Hasta", fg=Theme.MUTED, bg=Theme.PANEL).grid(
-            row=0, column=1, sticky="w", padx=(12, 0)
-        )
-        text_entry(filtros, self.var_hasta, 12).grid(
             row=1, column=1, sticky="w", padx=(12, 0)
         )
+        self.dp_hasta = DatePicker(
+            filtros,
+            textvariable=self.var_hasta,
+            allow_empty=True,
+            bg=Theme.PANEL,
+        )
+        self.dp_hasta.grid(row=2, column=1, sticky="w", padx=(12, 0))
 
         tk.Label(filtros, text="Estado", fg=Theme.MUTED, bg=Theme.PANEL).grid(
-            row=0, column=2, sticky="w", padx=(12, 0)
+            row=1, column=2, sticky="w", padx=(12, 0)
         )
         self.cb_filtro = ttk.Combobox(
             filtros,
@@ -140,25 +166,63 @@ class AuditoriaSyncView(tk.Frame):
             state="readonly",
             width=10,
         )
-        self.cb_filtro.grid(row=1, column=2, sticky="w", padx=(12, 0))
+        self.cb_filtro.grid(row=2, column=2, sticky="w", padx=(12, 0))
         self.cb_filtro.bind("<<ComboboxSelected>>", lambda _e: self.refrescar())
 
         tk.Label(filtros, text="Buscar", fg=Theme.MUTED, bg=Theme.PANEL).grid(
-            row=0, column=3, sticky="w", padx=(12, 0)
+            row=1, column=3, sticky="w", padx=(12, 0)
         )
         ent = text_entry(filtros, self.var_buscar, 18)
-        ent.grid(row=1, column=3, sticky="w", padx=(12, 0))
+        ent.grid(row=2, column=3, sticky="w", padx=(12, 0))
         ent.bind("<Return>", lambda _e: self.refrescar())
 
         secondary_button(filtros, "Filtrar", self.refrescar).grid(
-            row=1, column=4, padx=(12, 0)
+            row=2, column=4, padx=(12, 0)
         )
         secondary_button(
-            filtros, "Hoy", lambda: self._rango_rapido(0)
-        ).grid(row=1, column=5, padx=(6, 0))
+            filtros, "Hoy", lambda: self._rango_rapido_envio(0)
+        ).grid(row=2, column=5, padx=(6, 0))
         secondary_button(
-            filtros, "7 días", lambda: self._rango_rapido(7)
-        ).grid(row=1, column=6, padx=(6, 0))
+            filtros, "7 días", lambda: self._rango_rapido_envio(7)
+        ).grid(row=2, column=6, padx=(6, 0))
+
+        # Fila 2 — fecha del registro / producción
+        tk.Label(
+            filtros,
+            text="Fecha del registro (día de producción del fardo)",
+            font=("Segoe UI", 9, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 2))
+
+        tk.Label(filtros, text="Desde", fg=Theme.MUTED, bg=Theme.PANEL).grid(
+            row=4, column=0, sticky="w"
+        )
+        self.dp_desde_reg = DatePicker(
+            filtros,
+            textvariable=self.var_desde_reg,
+            allow_empty=True,
+            bg=Theme.PANEL,
+        )
+        self.dp_desde_reg.grid(row=5, column=0, sticky="w")
+
+        tk.Label(filtros, text="Hasta", fg=Theme.MUTED, bg=Theme.PANEL).grid(
+            row=4, column=1, sticky="w", padx=(12, 0)
+        )
+        self.dp_hasta_reg = DatePicker(
+            filtros,
+            textvariable=self.var_hasta_reg,
+            allow_empty=True,
+            bg=Theme.PANEL,
+        )
+        self.dp_hasta_reg.grid(row=5, column=1, sticky="w", padx=(12, 0))
+
+        secondary_button(
+            filtros, "Mes actual", self._rango_mes_registro
+        ).grid(row=5, column=2, padx=(12, 0), sticky="w")
+        secondary_button(
+            filtros, "Sin filtro reg.", self._limpiar_filtro_registro
+        ).grid(row=5, column=3, padx=(6, 0), sticky="w")
 
         tk.Label(
             self,
@@ -194,7 +258,11 @@ class AuditoriaSyncView(tk.Frame):
         )
         for key, title, width in self.COLS:
             self.tree.heading(key, text=title)
-            anchor = "w" if key in ("id_remoto", "cliente", "msg", "lote") else "center"
+            anchor = (
+                "w"
+                if key in ("id_remoto", "cliente", "msg", "lote", "fecha_reg", "enviado")
+                else "center"
+            )
             self.tree.column(key, width=width, anchor=anchor, stretch=True)
 
         sy = ttk.Scrollbar(wrap, orient=tk.VERTICAL, command=self.tree.yview)
@@ -210,16 +278,29 @@ class AuditoriaSyncView(tk.Frame):
         self.tree.tag_configure("err", foreground=Theme.ERR_COLOR)
         self.tree.tag_configure("dup", foreground=Theme.US_COLOR)
 
-    def _rango_rapido(self, dias: int) -> None:
+    def _rango_rapido_envio(self, dias: int) -> None:
         hoy = date.today()
         desde = hoy if dias <= 0 else hoy - timedelta(days=dias)
-        self.var_desde.set(format_fecha_editable(desde))
-        self.var_hasta.set(format_fecha_editable(hoy))
+        self.dp_desde.set_date(desde, notify=False)
+        self.dp_hasta.set_date(hoy, notify=False)
         self.refrescar()
 
-    def _parse_rango(self) -> tuple[Optional[str], Optional[str]]:
-        d = parse_fecha_produccion(self.var_desde.get())
-        h = parse_fecha_produccion(self.var_hasta.get())
+    def _rango_mes_registro(self) -> None:
+        hoy = date.today()
+        self.dp_desde_reg.set_date(hoy.replace(day=1), notify=False)
+        self.dp_hasta_reg.set_date(hoy, notify=False)
+        self.refrescar()
+
+    def _limpiar_filtro_registro(self) -> None:
+        self.dp_desde_reg.clear(notify=False)
+        self.dp_hasta_reg.clear(notify=False)
+        self.refrescar()
+
+    def _parse_rango(
+        self, var_desde: tk.StringVar, var_hasta: tk.StringVar
+    ) -> tuple[Optional[str], Optional[str]]:
+        d = parse_fecha_produccion(var_desde.get())
+        h = parse_fecha_produccion(var_hasta.get())
         desde = d.strftime("%Y-%m-%d") if d else None
         hasta = h.strftime("%Y-%m-%d") if h else None
         return desde, hasta
@@ -275,12 +356,15 @@ class AuditoriaSyncView(tk.Frame):
                 "Falta PRECIX_SYNC_TOKEN. Configure el token en las variables de entorno.",
             )
             return
-        desde_ui, hasta_ui = self._parse_rango()
+        desde_ui, hasta_ui = self._parse_rango(self.var_desde_reg, self.var_hasta_reg)
+        if not desde_ui and not hasta_ui:
+            # Si no hay filtro de registro, usar el de subida como respaldo
+            desde_ui, hasta_ui = self._parse_rango(self.var_desde, self.var_hasta)
         todo = messagebox.askyesnocancel(
             "Traer desde la nube",
             "¿Descargar todos los pesajes de esta planta desde el sistema web?\n\n"
             "Sí = historial completo de la planta\n"
-            "No = solo el rango Desde/Hasta de los filtros\n"
+            "No = solo el rango de Fecha del registro (producción)\n"
             "Cancelar = no hacer nada\n\n"
             "Los registros se insertan/actualizan en SQLite local "
             "(clave id_local o lote+nº fardo) y quedan marcados como ya sincronizados.",
@@ -292,7 +376,8 @@ class AuditoriaSyncView(tk.Frame):
         if not todo and (not desde or not hasta):
             messagebox.showwarning(
                 "Auditoría",
-                "Indique un rango Desde/Hasta válido (DD/MM/YYYY) o elija Sí para todo.",
+                "Indique un rango de Fecha del registro válido (DD/MM/YYYY) "
+                "o elija Sí para todo.",
             )
             return
 
@@ -378,12 +463,17 @@ class AuditoriaSyncView(tk.Frame):
         else:
             solo_ok = None
 
-        desde, hasta = self._parse_rango()
+        desde, hasta = self._parse_rango(self.var_desde, self.var_hasta)
+        desde_reg, hasta_reg = self._parse_rango(
+            self.var_desde_reg, self.var_hasta_reg
+        )
         self._rows = self.db.auditoria_sync(
             limite=800,
             solo_ok=solo_ok,
             desde=desde,
             hasta=hasta,
+            desde_pesaje=desde_reg,
+            hasta_pesaje=hasta_reg,
             texto=self.var_buscar.get(),
         )
         self.tree.delete(*self.tree.get_children())
@@ -404,6 +494,7 @@ class AuditoriaSyncView(tk.Frame):
                 iid=str(r.id),
                 values=(
                     r.enviado_en,
+                    r.fecha_hora_pesaje or "—",
                     estado,
                     r.http_status or "—",
                     r.nro_fardo,
@@ -422,8 +513,13 @@ class AuditoriaSyncView(tk.Frame):
             )
 
         total_db, ok_db = self.db.contar_auditoria_sync()
+        filtro_reg = (
+            f"reg. {desde_reg or '…'}→{hasta_reg or '…'}"
+            if (desde_reg or hasta_reg)
+            else "sin filtro reg."
+        )
         self.var_resumen.set(
             f"{pend} pendiente(s) de subir  ·  "
             f"Mostrando {len(self._rows)} · vista OK {ok_n} / Error {err_n}  ·  "
-            f"Histórico {total_db} (exitosos {ok_db})"
+            f"{filtro_reg}  ·  Histórico {total_db} (exitosos {ok_db})"
         )

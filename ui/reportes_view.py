@@ -18,7 +18,8 @@ from db import (
 )
 from models import RegistroPesaje
 from reports import exportar_excel, exportar_pdf, nombre_sugerido
-from ui.widgets import Theme, secondary_button, text_entry
+from ui.date_picker import DatePicker
+from ui.widgets import Theme, secondary_button
 
 
 class ReportesView(tk.Frame):
@@ -72,10 +73,17 @@ class ReportesView(tk.Frame):
 
         self.fr_dia = tk.Frame(filtros, bg=Theme.PANEL)
         self.fr_dia.grid(row=1, column=1, sticky="w", padx=(16, 0))
-        tk.Label(self.fr_dia, text="Fecha (DD/MM/YYYY)", fg=Theme.MUTED, bg=Theme.PANEL).pack(
+        tk.Label(self.fr_dia, text="Fecha", fg=Theme.MUTED, bg=Theme.PANEL).pack(
             anchor="w"
         )
-        text_entry(self.fr_dia, self.var_desde, 12).pack(anchor="w")
+        hoy = date.today()
+        self.dp_dia = DatePicker(
+            self.fr_dia,
+            textvariable=self.var_desde,
+            value=hoy,
+            bg=Theme.PANEL,
+        )
+        self.dp_dia.pack(anchor="w")
 
         self.fr_mes = tk.Frame(filtros, bg=Theme.PANEL)
         self.fr_mes.grid(row=1, column=1, sticky="w", padx=(16, 0))
@@ -105,13 +113,23 @@ class ReportesView(tk.Frame):
         tk.Label(self.fr_rango, text="Desde", fg=Theme.MUTED, bg=Theme.PANEL).grid(
             row=0, column=0, sticky="w"
         )
-        text_entry(self.fr_rango, self.var_desde, 12).grid(row=1, column=0, sticky="w")
+        self.dp_desde = DatePicker(
+            self.fr_rango,
+            textvariable=self.var_desde,
+            value=hoy,
+            bg=Theme.PANEL,
+        )
+        self.dp_desde.grid(row=1, column=0, sticky="w")
         tk.Label(self.fr_rango, text="Hasta", fg=Theme.MUTED, bg=Theme.PANEL).grid(
             row=0, column=1, sticky="w", padx=(8, 0)
         )
-        text_entry(self.fr_rango, self.var_hasta, 12).grid(
-            row=1, column=1, sticky="w", padx=(8, 0)
+        self.dp_hasta = DatePicker(
+            self.fr_rango,
+            textvariable=self.var_hasta,
+            value=hoy,
+            bg=Theme.PANEL,
         )
+        self.dp_hasta.grid(row=1, column=1, sticky="w", padx=(8, 0))
 
         btns = tk.Frame(filtros, bg=Theme.PANEL)
         btns.grid(row=1, column=2, sticky="e", padx=(20, 0))

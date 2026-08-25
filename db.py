@@ -441,6 +441,7 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
                 cur = conn.execute(
                     """
                     UPDATE pesajes SET
+                        fecha_hora = COALESCE(?, fecha_hora),
                         cliente = ?, lote = ?, color = ?, denier = ?, corte = ?,
                         nro_fardo = ?, peso_bruto = ?, peso_neto = ?,
                         operario = ?, peso_total = ?, tara_carreta = ?,
@@ -449,6 +450,7 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
                     WHERE id = ? AND activo = 1
                     """,
                     (
+                        (datos.fecha_hora_registro or None),
                         datos.cliente,
                         datos.lote,
                         datos.color,
