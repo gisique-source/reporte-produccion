@@ -9,8 +9,10 @@ from tkinter import messagebox
 
 from PIL import Image, ImageTk
 
+from label_layout import get_layout
 from models import DatosEtiqueta
 from print_engine import imprimir_etiqueta, render_etiqueta_region
+from ui.label_preview import PREVIEW_SCALE
 from ui.widgets import Theme, secondary_button
 
 
@@ -59,8 +61,16 @@ class PrintPreviewDialog(tk.Toplevel):
         frame = tk.Frame(self, bg=Theme.BORDER, padx=1, pady=1)
         frame.pack(padx=16, pady=4)
         try:
-            img = render_etiqueta_region(self.datos, dpi=140, bg="white", show_guides=True)
-            img = self._fit(img, 520, 420)
+            layout = get_layout()
+            tw = max(1, int(layout.label_width_mm * PREVIEW_SCALE))
+            th = max(1, int(layout.label_height_mm * PREVIEW_SCALE))
+            img = render_etiqueta_region(
+                self.datos,
+                dpi=int(25.4 * PREVIEW_SCALE),
+                bg="white",
+                show_guides=True,
+            )
+            img = img.resize((tw, th), Image.Resampling.LANCZOS)
             self._photo = ImageTk.PhotoImage(img)
             tk.Label(frame, image=self._photo, bg="#ffffff").pack()
         except Exception as exc:  # noqa: BLE001
@@ -90,16 +100,6 @@ class PrintPreviewDialog(tk.Toplevel):
             cursor="hand2",
             command=self._imprimir,
         ).pack(side=tk.RIGHT, padx=(0, 8))
-
-    def _fit(self, img: Image.Image, max_w: int, max_h: int) -> Image.Image:
-        w, h = img.size
-        if w <= 0 or h <= 0:
-            return img
-        scale = min(max_w / w, max_h / h, 1.0)
-        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
-        if (nw, nh) == (w, h):
-            return img
-        return img.resize((nw, nh), Image.Resampling.LANCZOS)
 
     def _center(self) -> None:
         self.update_idletasks()

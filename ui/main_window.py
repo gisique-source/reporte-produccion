@@ -13,6 +13,7 @@ from serial_reader import SerialWeightReader
 from sync import SyncWorker
 from ui.auditoria_cambios_view import AuditoriaCambiosView
 from ui.auditoria_view import AuditoriaSyncView
+from ui.exportacion_view import ExportacionView
 from ui.etiqueta_editor_view import EtiquetaEditorView
 from ui.hoja_dia_view import HojaDiaView
 from ui.maestros_view import MaestrosView
@@ -129,6 +130,7 @@ class PrecixApp(_TkBase):
             self.nb, self.db, on_open_day=self._abrir_dia
         )
         self.view_reportes = ReportesView(self.nb, self.db)
+        self.view_exportacion = ExportacionView(self.nb, self.db)
         self.tab_auditoria = ttk.Notebook(self.nb)
         self.view_auditoria = AuditoriaSyncView(
             self.tab_auditoria, self.db, sync=self.sync
@@ -147,6 +149,7 @@ class PrecixApp(_TkBase):
         self.nb.add(self.view_hoja, text="  Hoja de cálculo  ")
         self.nb.add(self.view_mes, text="  Resumen mensual  ")
         self.nb.add(self.view_reportes, text="  Reportes  ")
+        self.nb.add(self.view_exportacion, text="  Exportación  ")
         self.nb.add(self.tab_auditoria, text="  Auditoría  ")
         self.nb.add(self.view_etiqueta, text="  Etiqueta  ")
         self.nb.add(self.view_maestros, text="  Maestros  ")
@@ -157,6 +160,8 @@ class PrecixApp(_TkBase):
             if self.nb.select() == str(self.tab_auditoria):
                 self.view_auditoria.refrescar()
                 self.view_aud_cambios.refrescar()
+            elif self.nb.select() == str(self.view_exportacion):
+                self.view_exportacion.refrescar()
             elif self.nb.select() == str(self.view_pesaje):
                 self.view_pesaje.al_mostrar()
         except tk.TclError:

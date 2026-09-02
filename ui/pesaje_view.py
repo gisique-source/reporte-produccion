@@ -26,6 +26,7 @@ from ui.searchable_dropdown import SearchableDropdown
 from ui.pesaje_data import (
     asegurar_prefijo_lote,
     copiar_ultimo_registro,
+    datos_preview_pesaje,
     lote_prefijo,
     normalizar_lote_campo,
     proponer_nro_fardo,
@@ -52,6 +53,7 @@ class PesajeView(tk.Frame):
         self.fecha = date.today()
         self._guardando = False
         self._last_status = ""
+        self._peso_manual: Optional[float] = None
 
         self.var_fecha = tk.StringVar(value=format_fecha_editable(self.fecha))
         self.var_nro = tk.StringVar()
@@ -95,7 +97,6 @@ class PesajeView(tk.Frame):
         self.var_tara_fardo.trace_add(
             "write", lambda *_: self._actualizar_indicadores()
         )
-        self.refrescar_maestros()
         self.refrescar()
         self.after(UI_REFRESH_MS, self._refresh)
 
@@ -120,20 +121,49 @@ class PesajeView(tk.Frame):
         body = tk.Frame(self, bg=Theme.BG)
         body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 10))
         body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2)
+        body.columnconfigure(1, weight=2, minsize=520)
         body.rowconfigure(0, weight=1)
 
         left = tk.Frame(body, bg=Theme.BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
+        weight_row = tk.Frame(left, bg=Theme.BG)
+        weight_row.pack(pady=(4, 0))
+
         self.lbl_weight = tk.Label(
-            left,
+            weight_row,
             text="---.-- kg",
             font=("Consolas", 56, "bold"),
             fg=Theme.FG,
             bg=Theme.BG,
         )
-        self.lbl_weight.pack(pady=(4, 0))
+        self.lbl_weight.pack(side=tk.LEFT)
+
+        manual_fr = tk.Frame(weight_row, bg=Theme.BG)
+        manual_fr.pack(side=tk.LEFT, anchor="n", padx=(10, 0), pady=(8, 0))
+        self.btn_peso_manual = tk.Button(
+            manual_fr,
+            text="✎\nManual",
+            font=("Segoe UI", 8, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+            activeforeground=Theme.ACCENT,
+            activebackground=Theme.TREE_HEAD,
+            relief=tk.GROOVE,
+            padx=6,
+            pady=4,
+            cursor="hand2",
+            command=self._abrir_peso_manual,
+        )
+        self.btn_peso_manual.pack()
+        self.lbl_manual = tk.Label(
+            manual_fr,
+            text="",
+            font=("Segoe UI", 8, "bold"),
+            fg=Theme.US_COLOR,
+            bg=Theme.BG,
+        )
+        self.lbl_manual.pack(pady=(4, 0))
 
         status_row = tk.Frame(left, bg=Theme.BG)
         status_row.pack(pady=(2, 6))
@@ -318,15 +348,49 @@ class PesajeView(tk.Frame):
     def _dd_maestro(
         self, parent: tk.Widget, var: tk.StringVar, key: str, width: int
     ) -> SearchableDropdown:
+        placeholders = {
+            "cliente": "Cliente…",
+            "color": "Color…",
+            "dn": "Dn…",
+            "corte": "Corte…",
+            "operario": "Operario…",
+        }
         dd = SearchableDropdown(
             parent,
             textvariable=var,
             width=width,
             font=("Segoe UI", 10),
+            placeholder=placeholders.get(key, ""),
             on_commit=lambda _v: self._actualizar_preview(),
             compact=True,
         )
         return dd
+
+    def _limpiar_maestros(self) -> None:
+        """Deja vacíos los campos de maestros (primer fardo del día)."""
+        for var in (
+            self.var_cliente,
+            self.var_color,
+            self.var_dn,
+            self.var_corte,
+            self.var_operario,
+        ):
+            var.set("")
+        self.var_lote.set("")
+        for dd in (
+            self.cb_cliente,
+            self.cb_color,
+            self.cb_dn,
+            self.cb_corte,
+            self.cb_operario,
+        ):
+            dd.set("")
+
+    def _registros_activos_dia(self, dia: Optional[date] = None) -> list:
+        if not self.db:
+            return []
+        target = dia or self.fecha
+        return [r for r in self.db.por_fecha(target) if r.activo]
 
     def _lote_prefijo(self) -> str:
         return lote_prefijo(self.fecha.year)
@@ -335,8 +399,24 @@ class PesajeView(tk.Frame):
         if dia is None:
             return
         self.fecha = dia
-        asegurar_prefijo_lote(self.var_lote, self.fecha.year)
+        activos = self._registros_activos_dia(dia)
+        if activos:
+            copiar_ultimo_registro(
+                activos[-1],
+                anio=self.fecha.year,
+                var_cliente=self.var_cliente,
+                var_lote=self.var_lote,
+                var_color=self.var_color,
+                var_dn=self.var_dn,
+                var_corte=self.var_corte,
+                var_operario=self.var_operario,
+                var_tara_carreta=self.var_tara_carreta,
+                var_tara_fardo=self.var_tara_fardo,
+            )
+        else:
+            self._limpiar_maestros()
         self._proponer_nro()
+        self.refrescar_maestros()
         self._actualizar_preview()
 
     def al_mostrar(self) -> None:
@@ -395,9 +475,8 @@ class PesajeView(tk.Frame):
             dd.set_values(lista)
             if actual:
                 dd.set(actual)
-            elif lista and not var.get().strip():
-                var.set(lista[0])
-                dd.set(lista[0])
+            else:
+                dd.set("")
 
     def refrescar(self) -> None:
         if not self.db:
@@ -407,8 +486,7 @@ class PesajeView(tk.Frame):
         self.var_modo_fardo.set(self.db.get_modo_fardo())
         self.tp_hora.set(snap_hora_15(""), notify=False)
         self.var_hora.set(snap_hora_15(""))
-        regs = self.db.por_fecha(self.fecha)
-        activos = [r for r in regs if r.activo]
+        activos = self._registros_activos_dia(self.fecha)
         if activos:
             copiar_ultimo_registro(
                 activos[-1],
@@ -423,8 +501,9 @@ class PesajeView(tk.Frame):
                 var_tara_fardo=self.var_tara_fardo,
             )
         else:
-            self.var_lote.set(self._lote_prefijo())
+            self._limpiar_maestros()
         self._proponer_nro()
+        self.refrescar_maestros()
         self.var_msg.set("")
         self._actualizar_preview()
 
@@ -447,12 +526,145 @@ class PesajeView(tk.Frame):
         neto = max(total - tc - tf, 0.0)
         return bruto, neto, tc, tf
 
-    def _peso_actual(self) -> Optional[float]:
+    def _peso_bascula(self) -> Optional[float]:
         data = self.reader.snapshot()
         if data["weight"] is None:
             return None
         total = float(data["weight"])
         return total if total > 0 else None
+
+    def _peso_actual(self) -> Optional[float]:
+        if self._peso_manual is not None and self._peso_manual > 0:
+            return self._peso_manual
+        return self._peso_bascula()
+
+    def _limpiar_peso_manual(self) -> None:
+        self._peso_manual = None
+        self.lbl_manual.config(text="")
+        self.btn_peso_manual.config(bg=Theme.PANEL, fg=Theme.FG)
+        self._actualizar_display_peso()
+        self._actualizar_indicadores()
+
+    def _aplicar_peso_manual(self, valor: float) -> None:
+        self._peso_manual = valor
+        self.lbl_manual.config(text="MANUAL")
+        self.btn_peso_manual.config(bg=Theme.US_COLOR, fg="#ffffff")
+        self._actualizar_display_peso()
+        self._actualizar_indicadores()
+        self.var_msg.set(f"Peso manual: {valor:.2f} kg")
+
+    def _actualizar_display_peso(self) -> None:
+        if self._peso_manual is not None and self._peso_manual > 0:
+            self.lbl_weight.config(
+                text=f"{self._peso_manual:.2f} kg",
+                fg=Theme.US_COLOR,
+            )
+            return
+        data = self.reader.snapshot()
+        if data["weight"] is not None:
+            total = float(data["weight"])
+            self.lbl_weight.config(text=f"{total:.2f} {data['unit']}", fg=Theme.FG)
+        else:
+            self.lbl_weight.config(text="---.-- kg", fg=Theme.FG)
+
+    def _abrir_peso_manual(self) -> None:
+        top = self.winfo_toplevel()
+        win = tk.Toplevel(top)
+        win.title("Peso manual")
+        win.configure(bg=Theme.PANEL)
+        win.transient(top)
+        win.resizable(False, False)
+        win.grab_set()
+
+        tk.Label(
+            win,
+            text="Ingrese el peso total (kg)",
+            font=("Segoe UI", 11, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+        ).pack(padx=20, pady=(16, 4), anchor="w")
+        tk.Label(
+            win,
+            text="Use cuando la báscula no esté conectada o no capture el peso.",
+            font=("Segoe UI", 9),
+            fg=Theme.MUTED,
+            bg=Theme.PANEL,
+            wraplength=280,
+            justify=tk.LEFT,
+        ).pack(padx=20, pady=(0, 10), anchor="w")
+
+        inicial = ""
+        if self._peso_manual is not None and self._peso_manual > 0:
+            inicial = f"{self._peso_manual:.2f}"
+        else:
+            vivo = self._peso_bascula()
+            if vivo is not None:
+                inicial = f"{vivo:.2f}"
+            elif self.var_total.get() not in ("---.--", ""):
+                inicial = self.var_total.get().replace(",", ".")
+
+        var = tk.StringVar(value=inicial)
+        ent = text_entry(win, var, 14)
+        ent.pack(padx=20, pady=(0, 12))
+        ent.focus_set()
+        ent.select_range(0, tk.END)
+
+        btns = tk.Frame(win, bg=Theme.PANEL)
+        btns.pack(fill=tk.X, padx=20, pady=(0, 16))
+
+        def _ok() -> None:
+            raw = var.get().strip().replace(",", ".")
+            try:
+                val = float(raw)
+            except ValueError:
+                messagebox.showwarning(
+                    "Peso manual", "Ingrese un número válido.", parent=win
+                )
+                return
+            if val <= 0:
+                messagebox.showwarning(
+                    "Peso manual", "El peso debe ser mayor que cero.", parent=win
+                )
+                return
+            self._aplicar_peso_manual(val)
+            win.destroy()
+
+        def _bascula() -> None:
+            self._limpiar_peso_manual()
+            self.var_msg.set("Peso desde báscula")
+            win.destroy()
+
+        tk.Button(
+            btns,
+            text="Usar báscula",
+            font=("Segoe UI", 9),
+            relief=tk.FLAT,
+            bg=Theme.TREE_HEAD,
+            fg=Theme.FG,
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=_bascula,
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            btns,
+            text="Aplicar",
+            font=("Segoe UI", 10, "bold"),
+            relief=tk.FLAT,
+            bg=Theme.BTN_BG,
+            fg="#ffffff",
+            padx=14,
+            pady=5,
+            cursor="hand2",
+            command=_ok,
+        ).pack(side=tk.RIGHT)
+        ent.bind("<Return>", lambda _e: _ok())
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+        win.update_idletasks()
+        x = top.winfo_rootx() + (top.winfo_width() - win.winfo_reqwidth()) // 2
+        y = top.winfo_rooty() + 120
+        win.geometry(f"+{max(x, 40)}+{y}")
 
     def _actualizar_indicadores(self, _event=None) -> None:
         total = self._peso_actual()
@@ -479,27 +691,38 @@ class PesajeView(tk.Frame):
                 text=f"Puerto {PORT} · Reconectando…{hint}", fg=Theme.ERR_COLOR
             )
 
-        if data["weight"] is not None:
-            total = float(data["weight"])
-            self.lbl_weight.config(text=f"{total:.2f} {data['unit']}", fg=Theme.FG)
-        else:
-            self.lbl_weight.config(text="---.-- kg", fg=Theme.FG)
+        self._actualizar_display_peso()
         self._actualizar_indicadores()
 
-        st = data["status"]
-        self._last_status = st or ""
-        if st == "ST":
-            self.lbl_status.config(text="●  ST  ESTABLE", fg=Theme.ST_COLOR)
-        elif st == "US":
-            self.lbl_status.config(text="●  US  INESTABLE", fg=Theme.US_COLOR)
+        if self._peso_manual is not None:
+            self.lbl_status.config(text="●  MANUAL", fg=Theme.US_COLOR)
+            self._last_status = "MANUAL"
         else:
-            self.lbl_status.config(text="●  --", fg=Theme.MUTED)
+            st = data["status"]
+            self._last_status = st or ""
+            if st == "ST":
+                self.lbl_status.config(text="●  ST  ESTABLE", fg=Theme.ST_COLOR)
+            elif st == "US":
+                self.lbl_status.config(text="●  US  INESTABLE", fg=Theme.US_COLOR)
+            else:
+                self.lbl_status.config(text="●  --", fg=Theme.MUTED)
 
         self.after(UI_REFRESH_MS, self._refresh)
+
+    def _sync_maestros_desde_combo(self) -> None:
+        for dd, var in (
+            (self.cb_cliente, self.var_cliente),
+            (self.cb_color, self.var_color),
+            (self.cb_dn, self.var_dn),
+            (self.cb_corte, self.var_corte),
+            (self.cb_operario, self.var_operario),
+        ):
+            var.set(dd.get())
 
     def _datos_formulario(
         self, *, exigir_peso: bool = False
     ) -> Optional[DatosEtiqueta]:
+        self._sync_maestros_desde_combo()
         tc, tf = self._taras()
         datos, err = recoger_datos_pesaje(
             fecha=self.fecha,
@@ -520,9 +743,26 @@ class PesajeView(tk.Frame):
             self.var_msg.set(err)
         return datos
 
+    def _datos_preview(self) -> DatosEtiqueta:
+        self._sync_maestros_desde_combo()
+        tc, tf = self._taras()
+        return datos_preview_pesaje(
+            fecha=self.fecha,
+            peso_total=self._peso_actual(),
+            tara_carreta=tc,
+            tara_fardo=tf,
+            var_cliente=self.var_cliente,
+            var_lote=self.var_lote,
+            var_color=self.var_color,
+            var_dn=self.var_dn,
+            var_corte=self.var_corte,
+            var_operario=self.var_operario,
+            var_nro=self.var_nro,
+            var_hora=self.var_hora,
+        )
+
     def _actualizar_preview(self) -> None:
-        datos = self._datos_formulario(exigir_peso=False)
-        self.preview.schedule(datos)
+        self.preview.schedule(self._datos_preview())
 
     def guardar(self) -> bool:
         if self._guardando or not self.db:
@@ -546,7 +786,9 @@ class PesajeView(tk.Frame):
             return False
 
         aviso_peso = ""
-        if self._last_status == "US":
+        if self._peso_manual is not None:
+            aviso_peso = "\n\n📋 Peso ingresado manualmente (no báscula)."
+        elif self._last_status == "US":
             aviso_peso = "\n\n⚠ Peso INESTABLE (US). Confirme solo si es correcto."
         elif self._last_status != "ST":
             aviso_peso = "\n\n⚠ La báscula no reporta peso estable (ST)."
@@ -589,6 +831,7 @@ class PesajeView(tk.Frame):
 
     def _preparar_siguiente(self) -> None:
         """Propone el siguiente fardo conservando maestros del último guardado."""
+        self._limpiar_peso_manual()
         self.tp_hora.set(snap_hora_15(""), notify=False)
         self.var_hora.set(snap_hora_15(""))
         self._proponer_nro()

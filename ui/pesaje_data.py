@@ -69,6 +69,64 @@ def copiar_ultimo_registro(
         var_tara_fardo.set(f"{last.tara_fardo:.2f}")
 
 
+def _texto_o_guion(texto: str, *, placeholder: str = "—") -> str:
+    v = (texto or "").strip()
+    if not v or v.endswith("…"):
+        return placeholder
+    return v
+
+
+def datos_preview_pesaje(
+    *,
+    fecha: date,
+    peso_total: Optional[float],
+    tara_carreta: float,
+    tara_fardo: float,
+    var_cliente: tk.StringVar,
+    var_lote: tk.StringVar,
+    var_color: tk.StringVar,
+    var_dn: tk.StringVar,
+    var_corte: tk.StringVar,
+    var_operario: tk.StringVar,
+    var_nro: tk.StringVar,
+    var_hora: tk.StringVar,
+) -> DatosEtiqueta:
+    """Arma DatosEtiqueta parcial para vista previa (no exige campos completos)."""
+    total = float(peso_total) if peso_total is not None and peso_total > 0 else 0.0
+    bruto = max(total - tara_carreta, 0.0) if total > 0 else 0.0
+    neto = max(total - tara_carreta - tara_fardo, 0.0) if total > 0 else 0.0
+
+    lote_raw = var_lote.get().strip()
+    lote = normalizar_lote(lote_raw, anio=fecha.year) or _texto_o_guion(lote_raw)
+
+    nro_txt = var_nro.get().strip()
+    if nro_txt.isdigit() and int(nro_txt) >= 1:
+        nro_fardo = str(int(nro_txt))
+    else:
+        nro_fardo = _texto_o_guion(nro_txt, placeholder="1")
+
+    hhmm = snap_hora_15(var_hora.get())
+    fh = combinar_fecha_hora(fecha, hhmm)
+
+    return DatosEtiqueta(
+        color=_texto_o_guion(var_color.get()),
+        cliente=_texto_o_guion(var_cliente.get()),
+        lote=lote,
+        dn=_texto_o_guion(var_dn.get()),
+        corte=_texto_o_guion(var_corte.get()),
+        nro_fardo=nro_fardo,
+        fecha=format_fecha_editable(fecha),
+        peso_bruto=bruto,
+        peso_neto=neto,
+        operario=_texto_o_guion(var_operario.get()),
+        peso_total=total,
+        tara_carreta=tara_carreta,
+        tara_fardo=tara_fardo,
+        hora=hora_etiqueta_12h(hhmm),
+        fecha_hora_registro=fh,
+    )
+
+
 def recoger_datos_pesaje(
     *,
     fecha: date,

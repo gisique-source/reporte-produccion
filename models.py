@@ -31,7 +31,22 @@ class DatosEtiqueta:
 
     @property
     def codigo_barras(self) -> str:
-        return f"{self.lote}-{self.nro_fardo}"
+        """Código principal impreso (YYMM + fardo 3 dígitos)."""
+        from codigos_produccion import codigo_principal, periodo_desde_fecha_hora
+
+        if self.fecha_hora_registro:
+            anio, mes = periodo_desde_fecha_hora(self.fecha_hora_registro)
+        else:
+            from datetime import date
+
+            hoy = date.today()
+            anio, mes = hoy.year, hoy.month
+        return codigo_principal(anio, mes, self.nro_fardo)
+
+    def codigo_largo(self, catalogo=None) -> str:
+        from codigos_produccion import codigos_desde_registro
+
+        return codigos_desde_registro(self, catalogo=catalogo)["largo"]
 
     @property
     def denier(self) -> str:
