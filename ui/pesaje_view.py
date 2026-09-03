@@ -33,7 +33,7 @@ from ui.pesaje_data import (
     recoger_datos_pesaje,
 )
 from ui.time_picker import TimePicker, snap_hora_15
-from ui.widgets import Theme, confirm_modal, field_label, text_entry
+from ui.widgets import ScrollableFrame, Theme, confirm_modal, field_label, text_entry
 
 
 class PesajeView(tk.Frame):
@@ -54,6 +54,8 @@ class PesajeView(tk.Frame):
         self._guardando = False
         self._last_status = ""
         self._peso_manual: Optional[float] = None
+        self._ultimo_guardado: Optional[DatosEtiqueta] = None
+        self._esperar_refresco = False
 
         self.var_fecha = tk.StringVar(value=format_fecha_editable(self.fecha))
         self.var_nro = tk.StringVar()
@@ -117,6 +119,20 @@ class PesajeView(tk.Frame):
             fg=Theme.MUTED,
             bg=Theme.BG,
         ).pack(side=tk.LEFT, padx=(14, 0))
+        tk.Button(
+            head,
+            text="↻  Refrescar",
+            font=("Segoe UI", 9, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+            activeforeground=Theme.ACCENT,
+            activebackground=Theme.TREE_HEAD,
+            relief=tk.GROOVE,
+            padx=10,
+            pady=3,
+            cursor="hand2",
+            command=self._preparar_siguiente,
+        ).pack(side=tk.RIGHT)
 
         body = tk.Frame(self, bg=Theme.BG)
         body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 10))
@@ -127,7 +143,14 @@ class PesajeView(tk.Frame):
         left = tk.Frame(body, bg=Theme.BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
-        weight_row = tk.Frame(left, bg=Theme.BG)
+        foot = tk.Frame(left, bg=Theme.BG)
+        foot.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+
+        scroll = ScrollableFrame(left, bg=Theme.BG)
+        scroll.pack(fill=tk.BOTH, expand=True)
+        inner = scroll.body
+
+        weight_row = tk.Frame(inner, bg=Theme.BG)
         weight_row.pack(pady=(4, 0))
 
         self.lbl_weight = tk.Label(
@@ -165,7 +188,7 @@ class PesajeView(tk.Frame):
         )
         self.lbl_manual.pack(pady=(4, 0))
 
-        status_row = tk.Frame(left, bg=Theme.BG)
+        status_row = tk.Frame(inner, bg=Theme.BG)
         status_row.pack(pady=(2, 6))
         self.lbl_status = tk.Label(
             status_row,
@@ -184,7 +207,7 @@ class PesajeView(tk.Frame):
         )
         self.lbl_conn.pack(side=tk.LEFT)
 
-        ind = tk.Frame(left, bg=Theme.BG)
+        ind = tk.Frame(inner, bg=Theme.BG)
         ind.pack(pady=(0, 10))
         self._make_indicador(
             ind, "P. TOTAL", self.var_total, Theme.FG, Theme.CARD_TOTAL
@@ -196,8 +219,8 @@ class PesajeView(tk.Frame):
             ind, "P. NETO", self.var_neto, Theme.ST_COLOR, Theme.CARD_NETO
         ).pack(side=tk.LEFT, padx=8)
 
-        form = tk.Frame(left, bg=Theme.PANEL, padx=14, pady=12)
-        form.pack(fill=tk.X)
+        form = tk.Frame(inner, bg=Theme.PANEL, padx=14, pady=12)
+        form.pack(fill=tk.X, padx=2)
 
         def _cell(row: int, col: int, label: str, widget: tk.Widget) -> None:
             tk.Label(
@@ -262,8 +285,8 @@ class PesajeView(tk.Frame):
         for c in range(3):
             form.columnconfigure(c, weight=1)
 
-        modo_row = tk.Frame(left, bg=Theme.BG)
-        modo_row.pack(fill=tk.X, pady=(8, 0))
+        modo_row = tk.Frame(inner, bg=Theme.BG)
+        modo_row.pack(fill=tk.X, pady=(8, 8))
         tk.Label(
             modo_row,
             text="Correlativo:",
@@ -292,8 +315,6 @@ class PesajeView(tk.Frame):
             command=lambda: self._set_modo_fardo(MODO_FARDO_CONTINUAR),
         ).pack(side=tk.LEFT)
 
-        foot = tk.Frame(left, bg=Theme.BG)
-        foot.pack(fill=tk.X, pady=(10, 0))
         tk.Label(
             foot,
             textvariable=self.var_msg,
@@ -303,7 +324,7 @@ class PesajeView(tk.Frame):
             anchor="w",
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        tk.Button(
+        self.btn_guardar = tk.Button(
             foot,
             text="GUARDAR",
             font=("Segoe UI", 14, "bold"),
@@ -316,7 +337,23 @@ class PesajeView(tk.Frame):
             pady=10,
             cursor="hand2",
             command=self.guardar,
-        ).pack(side=tk.RIGHT)
+        )
+        self.btn_guardar.pack(side=tk.RIGHT)
+
+        self.btn_imprimir = tk.Button(
+            foot,
+            text="IMPRIMIR",
+            font=("Segoe UI", 14, "bold"),
+            fg="#ffffff",
+            bg=Theme.ACCENT,
+            activeforeground="#ffffff",
+            activebackground="#1e40af",
+            relief=tk.FLAT,
+            padx=28,
+            pady=10,
+            cursor="hand2",
+            command=self.imprimir,
+        )
 
         right = tk.Frame(body, bg=Theme.BG)
         right.grid(row=0, column=1, sticky="nsew")
@@ -420,9 +457,10 @@ class PesajeView(tk.Frame):
         self._actualizar_preview()
 
     def al_mostrar(self) -> None:
-        """Sincroniza maestros y correlativo al volver a la pestaña."""
+        """Sincroniza maestros; no cambia el Nº si aún no se pulsó Refrescar."""
         self.refrescar_maestros()
-        self._proponer_nro()
+        if not self._esperar_refresco:
+            self._proponer_nro()
 
     def _on_lote_focus_in(self, _event=None) -> None:
         asegurar_prefijo_lote(self.var_lote, self.fecha.year)
@@ -822,20 +860,39 @@ class PesajeView(tk.Frame):
             messagebox.showwarning("Pesaje", str(exc), parent=self)
             return False
 
-        self.var_msg.set(f"Fardo {datos.nro_fardo} registrado (ID {pid})")
-        PrintPreviewDialog(self, datos)
-        self._preparar_siguiente()
+        self.var_msg.set(
+            f"Fardo {datos.nro_fardo} registrado (ID {pid}). "
+            "Use Refrescar para el siguiente."
+        )
+        self._ultimo_guardado = datos
+        self._esperar_refresco = True
+        self.btn_imprimir.pack(side=tk.RIGHT, padx=(0, 8), before=self.btn_guardar)
         if self.on_saved:
             self.on_saved()
         return True
 
+    def imprimir(self) -> None:
+        datos = self._ultimo_guardado
+        if datos is None:
+            self.var_msg.set("Guarde el fardo antes de imprimir")
+            return
+        PrintPreviewDialog(
+            self,
+            datos,
+            on_printed=lambda: self.var_msg.set(
+                f"Fardo {datos.nro_fardo} enviado a impresora"
+            ),
+        )
+
     def _preparar_siguiente(self) -> None:
-        """Propone el siguiente fardo conservando maestros del último guardado."""
+        """Restablece el formulario: siguiente Nº, hora actual y peso en vivo."""
         self._limpiar_peso_manual()
         self.tp_hora.set(snap_hora_15(""), notify=False)
         self.var_hora.set(snap_hora_15(""))
         self._proponer_nro()
+        self._esperar_refresco = False
         self._actualizar_preview()
+        self.var_msg.set("Formulario listo para el siguiente fardo")
 
     def focus_es_entrada(self) -> bool:
         w = self.focus_get()
