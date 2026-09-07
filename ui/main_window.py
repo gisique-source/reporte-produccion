@@ -51,6 +51,7 @@ class PrecixApp(_TkBase):
         self.configure(bg=Theme.BG)
         self.geometry("1180x820")
         self.minsize(1000, 720)
+        self._set_window_icon()
 
         self.db = PesajeDatabase()
         self.reader = SerialWeightReader(PORT)
@@ -72,6 +73,20 @@ class PrecixApp(_TkBase):
         self.after(200, self._refresh_device_light)
         self.after(5000, self._refresh_sync_badge)
         self.after(800, self._maybe_offer_restore)
+
+    def _set_window_icon(self) -> None:
+        try:
+            from pathlib import Path
+
+            from utils import resource_path
+
+            for rel in ("public/logo.png", "logo.png"):
+                path = Path(resource_path(rel))
+                if path.is_file():
+                    self.iconphoto(True, tk.PhotoImage(file=str(path)))
+                    return
+        except tk.TclError:
+            pass
 
     def _build(self) -> None:
         header = tk.Frame(self, bg=Theme.BG)

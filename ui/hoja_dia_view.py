@@ -62,7 +62,7 @@ class HojaDiaView(tk.Frame):
         ("hora", "Hora", 80),
         ("operario", "Operario", 90),
         ("sync", "Sync", 45),
-        ("accion", "Acción", 195),
+        ("accion", "Acción", 220),
     )
 
     def __init__(
@@ -114,7 +114,9 @@ class HojaDiaView(tk.Frame):
         self._foto: Optional[dict] = None
         self._printing = False
         self._guardando = False
-        self._espera_bascula_cero = False
+        # Evita registro fantasma al abrir: no auto-guardar hasta que la báscula
+        # haya estado en cero (<0.3 kg) desde el último guardado o el arranque.
+        self._espera_bascula_cero = True
         self._iids_orden: list[str] = []
         self._editando_id: Optional[int] = None
 
@@ -186,11 +188,12 @@ class HojaDiaView(tk.Frame):
 
         tools = tk.Frame(wrap, bg=Theme.BG)
         tools.pack(fill=tk.X, pady=(0, 4))
+        self.tools_bar = tools
         tk.Checkbutton(
             tools,
             text="Mostrar ocultos",
             variable=self.var_mostrar_ocultos,
-            command=self.refrescar,
+            command=self._on_toggle_ocultos,
             fg=Theme.FG,
             bg=Theme.BG,
             selectcolor=Theme.PANEL,
@@ -207,6 +210,42 @@ class HojaDiaView(tk.Frame):
         ).pack(side=tk.LEFT, padx=(16, 0))
 
         self._build_filtros_maestros(wrap)
+
+        self.ocultos_bar = tk.Frame(wrap, bg=Theme.BG)
+        tk.Label(
+            self.ocultos_bar,
+            text="Ocultos:",
+            font=("Segoe UI", 9, "bold"),
+            fg=Theme.ERR_COLOR,
+            bg=Theme.BG,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Label(
+            self.ocultos_bar,
+            text="Filtre por Lote · eliminación definitiva (no reversible)",
+            font=("Segoe UI", 9),
+            fg=Theme.MUTED,
+            bg=Theme.BG,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        secondary_button(
+            self.ocultos_bar,
+            "Eliminar seleccionado",
+            self.eliminar_seleccionado_definitivo,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(
+            self.ocultos_bar,
+            text="Eliminar ocultos del lote",
+            font=("Segoe UI", 9, "bold"),
+            fg="#ffffff",
+            bg=Theme.ERR_COLOR,
+            activeforeground="#ffffff",
+            activebackground="#991b1b",
+            relief=tk.FLAT,
+            padx=10,
+            pady=2,
+            cursor="hand2",
+            command=self.eliminar_ocultos_lote_filtrado,
+        ).pack(side=tk.LEFT)
+        self._sync_ocultos_bar()
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -436,7 +475,7 @@ class HojaDiaView(tk.Frame):
             bar,
             text=(
                 "El peso de la báscula se refleja en la fila nueva. "
-                "Con datos completos y peso estable se registra solo. "
+                "Retire el fardo y vuelva a colocarlo (peso estable ST) para registrar. "
                 "IMPRIMIR abre la vista previa en fardos ya guardados."
             ),
             font=("Segoe UI", 9),
@@ -536,6 +575,21 @@ class HojaDiaView(tk.Frame):
             return dd
 
         self.dd_filtro_cliente = _filtro("cliente", "Cliente", 14)
+        self.var_filtro_lote = tk.StringVar()
+        lote_fr = tk.Frame(row, bg=Theme.BG)
+        lote_fr.pack(side=tk.LEFT, padx=(0, 6))
+        tk.Label(
+            lote_fr,
+            text="Lote",
+            font=("Segoe UI", 8),
+            fg=Theme.MUTED,
+            bg=Theme.BG,
+        ).pack(anchor="w")
+        self.ent_filtro_lote = text_entry(lote_fr, self.var_filtro_lote, 12)
+        self.ent_filtro_lote.pack()
+        self.var_filtro_lote.trace_add(
+            "write", lambda *_: self._aplicar_filtros_maestros()
+        )
         self.dd_filtro_color = _filtro("color", "Color", 10)
         self.dd_filtro_dn = _filtro("dn", "Dn", 6)
         self.dd_filtro_corte = _filtro("corte", "Corte", 6)
@@ -561,6 +615,7 @@ class HojaDiaView(tk.Frame):
             return {}
         return {
             "cliente": self.dd_filtro_cliente.get(),
+            "lote": self.var_filtro_lote.get().strip(),
             "color": self.dd_filtro_color.get(),
             "dn": self.dd_filtro_dn.get(),
             "corte": self.dd_filtro_corte.get(),
@@ -578,9 +633,20 @@ class HojaDiaView(tk.Frame):
             vals = dict(zip(keys, self.tree.item(iid, "values")))
             visible = True
             for col, q in filtros.items():
-                if q and normalizar_maestro(q) not in normalizar_maestro(
-                    str(vals.get(col, ""))
-                ):
+                if not q:
+                    continue
+                val = str(vals.get(col, ""))
+                if col == "lote":
+                    norm_q = normalizar_lote(q, anio=self.fecha.year) or q
+                    norm_v = normalizar_lote(val, anio=self.fecha.year) or val
+                    if (
+                        normalizar_maestro(norm_q) not in normalizar_maestro(norm_v)
+                        and normalizar_maestro(norm_v) not in normalizar_maestro(norm_q)
+                    ):
+                        visible = False
+                        break
+                    continue
+                if normalizar_maestro(q) not in normalizar_maestro(val):
                     visible = False
                     break
             if visible:
@@ -602,6 +668,7 @@ class HojaDiaView(tk.Frame):
         ):
             dd.set("")
             dd._refresh_placeholder()
+        self.var_filtro_lote.set("")
         self._aplicar_filtros_maestros()
 
     def refrescar_maestros(self) -> None:
@@ -856,6 +923,7 @@ class HojaDiaView(tk.Frame):
         self._target_id = None
         self._selected_id = None
         self._peso_edit = None
+        self._espera_bascula_cero = True
         self.reanudar_medicion()
 
         activos = [r for r in self._regs if r.activo] if self._regs else []
@@ -886,7 +954,7 @@ class HojaDiaView(tk.Frame):
         self.lbl_modo.config(fg=Theme.ST_COLOR)
         self.var_hint.set(
             f"Nº {nro} · complete maestros · el peso se actualiza solo · "
-            f"con peso estable se registra y el próximo será + 1"
+            f"retire el fardo de la báscula y vuelva a colocarlo para registrar"
         )
         self.var_msg.set("")
         self.refrescar_maestros()
@@ -991,7 +1059,8 @@ class HojaDiaView(tk.Frame):
                 (
                     f"Nuevo fardo #{nro} — elija maestros; el peso de la báscula llena P.Total/Bruto/Neto.\n"
                     f"Lote: {self._lote_prefijo().strip()} + número (ej. {self._lote_prefijo()}15).\n"
-                    f"Con todos los datos y peso estable (ST) se registra solo.\n"
+                    f"Retire el fardo de la báscula y vuelva a colocarlo con peso estable (ST) "
+                    f"para registrar automáticamente.\n"
                     f"IMPRIMIR aparece en filas guardadas y completas (abre vista previa)."
                 ),
             )
@@ -1014,6 +1083,29 @@ class HojaDiaView(tk.Frame):
         if self.focus_es_entrada():
             return
         self.ocultar_seleccionado()
+
+    def _on_toggle_ocultos(self) -> None:
+        self._sync_ocultos_bar()
+        self.refrescar()
+
+    def _sync_ocultos_bar(self) -> None:
+        if not hasattr(self, "ocultos_bar"):
+            return
+        if self.var_mostrar_ocultos.get():
+            self.ocultos_bar.pack(fill=tk.X, pady=(0, 6))
+        else:
+            self.ocultos_bar.pack_forget()
+
+    def _filtros_eliminacion(self) -> dict[str, str]:
+        f = self._filtros_activos()
+        return {
+            "lote": f.get("lote", ""),
+            "cliente": f.get("cliente", ""),
+            "color": f.get("color", ""),
+            "dn": f.get("dn", ""),
+            "corte": f.get("corte", ""),
+            "operario": f.get("operario", ""),
+        }
 
     def ocultar_seleccionado(self) -> None:
         """Soft-delete del fardo (no borra; no libera el Nº)."""
@@ -1089,6 +1181,117 @@ class HojaDiaView(tk.Frame):
         if self.on_saved:
             self.on_saved()
 
+    def eliminar_seleccionado_definitivo(self) -> None:
+        if not self.var_mostrar_ocultos.get():
+            messagebox.showinfo(
+                "Hoja",
+                "Active «Mostrar ocultos» para eliminar registros ocultos.",
+            )
+            return
+        sel = self.tree.selection()
+        if sel and sel[0] == "__nuevo__":
+            return
+        rid = self._selected_id
+        if rid is None:
+            if not sel or sel[0] == "__nuevo__":
+                messagebox.showinfo("Hoja", "Seleccione un fardo oculto.")
+                return
+            rid = int(sel[0])
+        reg = next((r for r in self._regs if r.id == rid), None)
+        if reg is None:
+            messagebox.showinfo("Hoja", "Seleccione un fardo oculto.")
+            return
+        if reg.activo:
+            messagebox.showinfo(
+                "Hoja",
+                "Solo se eliminan definitivamente fardos ocultos. "
+                "Ocúltelo primero o elija otro registro.",
+            )
+            return
+        if not confirm_modal(
+            self,
+            "Eliminar definitivamente",
+            f"¿Eliminar PERMANENTEMENTE el fardo {reg.nro_fardo} (ID {reg.id})?\n\n"
+            f"Lote: {reg.lote} · Cliente: {reg.cliente}\n\n"
+            "Esta acción no se puede deshacer.",
+            ok_text="Eliminar",
+            cancel_text="Cancelar",
+        ):
+            return
+        try:
+            self.db.eliminar_definitivo(rid)
+        except ValueError as exc:
+            messagebox.showwarning("Hoja", str(exc))
+            return
+        self._modo_nuevo = False
+        self._editando_id = None
+        self._selected_id = None
+        self.var_msg.set(f"Fardo {reg.nro_fardo} eliminado definitivamente")
+        self.refrescar()
+        if self.on_saved:
+            self.on_saved()
+
+    def eliminar_ocultos_lote_filtrado(self) -> None:
+        if not self.var_mostrar_ocultos.get():
+            messagebox.showinfo(
+                "Hoja",
+                "Active «Mostrar ocultos» para eliminar registros ocultos.",
+            )
+            return
+        filtros = self._filtros_eliminacion()
+        lote_txt = filtros.get("lote", "").strip()
+        if not lote_txt:
+            messagebox.showinfo(
+                "Hoja",
+                "Escriba el lote en el filtro «Lote» para eliminar sus fardos ocultos.",
+            )
+            return
+        lote_norm = normalizar_lote(lote_txt, anio=self.fecha.year) or lote_txt
+        candidatos = self.db.listar_ocultos_dia(self.fecha, **filtros)
+        if not candidatos:
+            messagebox.showinfo(
+                "Hoja",
+                f"No hay fardos ocultos del día para el lote «{lote_norm}» "
+                f"(con los filtros actuales).",
+            )
+            return
+        detalle = "\n".join(
+            f"  · Fardo {r.nro_fardo} (ID {r.id}) — {r.cliente}" for r in candidatos[:12]
+        )
+        if len(candidatos) > 12:
+            detalle += f"\n  … y {len(candidatos) - 12} más"
+        if not confirm_modal(
+            self,
+            "Eliminar ocultos del lote",
+            f"¿Eliminar PERMANENTEMENTE {len(candidatos)} fardo(s) oculto(s)?\n\n"
+            f"Lote: {lote_norm} · Día: {format_fecha_corta(self.fecha)}\n\n"
+            f"{detalle}\n\n"
+            "Esta acción no se puede deshacer.",
+            ok_text="Eliminar todos",
+            cancel_text="Cancelar",
+        ):
+            return
+        try:
+            n = self.db.eliminar_ocultos_dia(self.fecha, **filtros)
+        except ValueError as exc:
+            messagebox.showwarning("Hoja", str(exc))
+            return
+        self._modo_nuevo = False
+        self._editando_id = None
+        self._selected_id = None
+        self.var_msg.set(f"{n} fardo(s) oculto(s) eliminado(s) del lote {lote_norm}")
+        self.refrescar()
+        if self.on_saved:
+            self.on_saved()
+
+    def _eliminar_fila_definitivo(self, iid: str) -> None:
+        try:
+            rid = int(iid)
+        except ValueError:
+            return
+        self._selected_id = rid
+        self.eliminar_seleccionado_definitivo()
+
     # --- Pesaje compacto -------------------------------------------------
 
     def _excel_puede_editar(self, iid: str, _key: str) -> bool:
@@ -1108,7 +1311,12 @@ class HojaDiaView(tk.Frame):
             return None
         if not reg.activo:
             return [
-                ("Restaurar", Theme.ST_COLOR, lambda i=iid: self._restaurar_fila(i))
+                ("Restaurar", Theme.ST_COLOR, lambda i=iid: self._restaurar_fila(i)),
+                (
+                    "Eliminar",
+                    Theme.ERR_COLOR,
+                    lambda i=iid: self._eliminar_fila_definitivo(i),
+                ),
             ]
         acciones = [
             ("Editar", Theme.ACCENT, lambda i=iid: self._iniciar_edicion(i)),

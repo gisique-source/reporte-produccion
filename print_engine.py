@@ -29,12 +29,7 @@ except ImportError:  # pragma: no cover
     win32print = None  # type: ignore
     win32ui = None  # type: ignore
 
-try:
-    from barcode import Code128
-    from barcode.writer import ImageWriter
-except ImportError:  # pragma: no cover
-    Code128 = None  # type: ignore
-    ImageWriter = None  # type: ignore
+from barcode_gen import encode_code128b
 
 PRINT_DPI = 300
 PAGE_W_PX = 2480
@@ -98,7 +93,6 @@ def _font(
 
     candidates: list[str] = []
     for name in names:
-        candidates.append(name)
         for folder in _fonts_dirs():
             candidates.append(str(folder / name))
 
@@ -107,40 +101,71 @@ def _font(
         if path in seen:
             continue
         seen.add(path)
+        if not os.path.isfile(path):
+            continue
         try:
             return ImageFont.truetype(path, size_px)
         except OSError:
             continue
-    # Último recurso: bitmap minúsculo (solo si no hay ninguna TTF)
     return ImageFont.load_default()
+
+
+def _render_barcode_native(payload: str, max_width: int, height: int) -> Image.Image:
+    """Code128 sin fuentes externas (compatible con .exe PyInstaller)."""
+    text = payload or "-"
+    widths = encode_code128b(text)
+    img = Image.new("RGB", (max_width, max(height, 1)), "white")
+    draw = ImageDraw.Draw(img)
+    quiet = max(2, max_width // 24)
+    total = sum(widths) or 1
+    inner_w = max(max_width - quiet * 2, 1)
+    module_w = inner_w / total
+    bar_h = max(int(height * 0.72), 1)
+    x = float(quiet)
+    black = True
+    for run in widths:
+        wpx = max(1, int(round(run * module_w)))
+        if black:
+            draw.rectangle((x, 0, x + wpx - 1, bar_h - 1), fill="black")
+        x += wpx
+        black = not black
+    try:
+        font = _font(10, dpi=PRINT_DPI)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        draw.text(
+            (max((max_width - tw) // 2, 0), min(bar_h + 1, height - 10)),
+            text,
+            fill="black",
+            font=font,
+        )
+    except OSError:
+        pass
+    return img
 
 
 def _render_barcode(payload: str, max_width: int, height: int) -> Image.Image:
     text = payload or "-"
-    if Code128 is None or ImageWriter is None:
-        img = Image.new("RGB", (max_width, height), "white")
-        draw = ImageDraw.Draw(img)
-        draw.text(
-            (8, max(0, height // 3)),
-            text,
-            fill="black",
-            font=_font(14, dpi=PRINT_DPI),
-        )
-        return img
+    try:
+        from barcode import Code128
+        from barcode.writer import ImageWriter
 
-    buf = io.BytesIO()
-    options = {
-        "module_width": 0.35,
-        "module_height": max(height * 25.4 / PRINT_DPI * 0.7, 8.0),
-        "quiet_zone": 1.5,
-        "font_size": 10,
-        "text_distance": 3,
-        "write_text": True,
-        "dpi": PRINT_DPI,
-    }
-    Code128(text, writer=ImageWriter()).write(buf, options=options)
-    buf.seek(0)
-    bc = Image.open(buf).convert("RGB")
+        buf = io.BytesIO()
+        options = {
+            "module_width": 0.35,
+            "module_height": max(height * 25.4 / PRINT_DPI * 0.7, 8.0),
+            "quiet_zone": 1.5,
+            "font_size": 10,
+            "text_distance": 3,
+            "write_text": False,
+            "dpi": PRINT_DPI,
+        }
+        Code128(text, writer=ImageWriter()).write(buf, options=options)
+        buf.seek(0)
+        bc = Image.open(buf).convert("RGB")
+    except Exception:
+        return _render_barcode_native(text, max_width, height)
+
     if bc.width > max_width or bc.height > height:
         bc = bc.resize(
             (min(bc.width, max_width), min(bc.height, height)),
@@ -150,6 +175,15 @@ def _render_barcode(payload: str, max_width: int, height: int) -> Image.Image:
     x = (max_width - bc.width) // 2
     y = (height - bc.height) // 2
     canvas.paste(bc, (x, y))
+    try:
+        draw = ImageDraw.Draw(canvas)
+        font = _font(10, dpi=PRINT_DPI)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        ty = min(y + bc.height + 1, height - 8)
+        draw.text((max((max_width - tw) // 2, 0), ty), text, fill="black", font=font)
+    except OSError:
+        pass
     return canvas
 
 
@@ -165,7 +199,7 @@ def _valor_campo(datos: "DatosEtiqueta", field_id: str) -> str:
     if field_id == "corte":
         return datos.corte
     if field_id == "nro_fardo":
-        return str(datos.nro_fardo)
+        return datos.nro_fardo_etiqueta
     if field_id == "fecha":
         return datos.fecha
     if field_id == "peso_bruto":

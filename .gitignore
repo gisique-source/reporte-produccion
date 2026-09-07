@@ -12,3 +12,9 @@ venv/
 .venv/
 env/
 ENV/
+
+# Build PyInstaller
+build/
+dist/
+*.spec
+build/app_icon.ico

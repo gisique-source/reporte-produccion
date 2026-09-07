@@ -7,10 +7,41 @@ import re
 import sys
 from datetime import date
 
+# Carpeta de datos en PC de planta (BD, .env, layout editable)
+DEFAULT_PLANT_DATA_DIR = r"C:\Proyecto\precix-weight"
+
+
+def app_dir() -> str:
+    """Carpeta donde está el .exe o el proyecto en desarrollo."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def data_dir() -> str:
+    """
+    Carpeta persistente de datos (SQLite, .env, layout).
+    En planta el .exe puede estar en el escritorio pero la BD vive en el proyecto.
+    """
+    explicit = os.environ.get("PRECIX_DATA_DIR", "").strip()
+    if explicit:
+        return explicit
+
+    if getattr(sys, "frozen", False):
+        plant = DEFAULT_PLANT_DATA_DIR
+        if os.path.isdir(plant):
+            return plant
+        exe_dir = app_dir()
+        if os.path.isfile(os.path.join(exe_dir, "pesajes.db")):
+            return exe_dir
+        return plant
+
+    return os.path.dirname(os.path.abspath(__file__))
+
 
 def resource_path(relative: str) -> str:
     """Ruta dinámica: desarrollo normal o bundle congelado (sys._MEIPASS)."""
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    base = getattr(sys, "_MEIPASS", app_dir())
     return os.path.join(base, relative)
 
 

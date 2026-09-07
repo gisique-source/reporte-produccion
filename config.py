@@ -5,12 +5,20 @@ from __future__ import annotations
 import os
 import serial
 
+from utils import app_dir, data_dir
+
 # Carga .env local (Linux/dev) sin depender de python-dotenv.
 # No sobrescribe variables ya definidas en el entorno (p. ej. Windows User).
-_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+def _env_candidates() -> list[str]:
+    paths = [os.path.join(data_dir(), ".env")]
+    if getattr(__import__("sys"), "frozen", False):
+        paths.append(os.path.join(app_dir(), ".env"))
+    else:
+        paths.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    return paths
 
 
-def _load_dotenv(path: str = _ENV_FILE) -> None:
+def _load_dotenv(path: str) -> None:
     if not os.path.isfile(path):
         return
     try:
@@ -29,7 +37,8 @@ def _load_dotenv(path: str = _ENV_FILE) -> None:
         pass
 
 
-_load_dotenv()
+for _env_path in _env_candidates():
+    _load_dotenv(_env_path)
 
 # ---------------------------------------------------------------------------
 # Puerto serie Precix-Weight
@@ -62,8 +71,8 @@ WEB = "www.gexim.com.pe"
 # ---------------------------------------------------------------------------
 # SQLite local-first + sync nube
 # ---------------------------------------------------------------------------
-# DB junto al exe / script (no dentro de _MEIPASS, que es de solo lectura)
-_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# BD en carpeta de datos de planta (no junto al .exe del escritorio)
+_APP_DIR = data_dir()
 DB_PATH = os.path.join(_APP_DIR, "pesajes.db")
 
 SYNC_API_URL = os.environ.get(

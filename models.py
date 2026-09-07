@@ -31,7 +31,15 @@ class DatosEtiqueta:
 
     @property
     def codigo_barras(self) -> str:
-        """Código principal impreso (YYMM + fardo 3 dígitos)."""
+        """Código principal impreso (YYMM + fardo 3 dígitos, ej. 2609043)."""
+        return self.nro_fardo_etiqueta
+
+    @property
+    def nro_fardo_etiqueta(self) -> str:
+        """Nº fardo en etiqueta: año (2) + mes (2) + fardo (3), ej. 2609043."""
+        nro = str(self.nro_fardo or "").strip()
+        if not nro.isdigit():
+            return nro
         from codigos_produccion import codigo_principal, periodo_desde_fecha_hora
 
         if self.fecha_hora_registro:
@@ -41,7 +49,7 @@ class DatosEtiqueta:
 
             hoy = date.today()
             anio, mes = hoy.year, hoy.month
-        return codigo_principal(anio, mes, self.nro_fardo)
+        return codigo_principal(anio, mes, nro)
 
     def codigo_largo(self, catalogo=None) -> str:
         from codigos_produccion import codigos_desde_registro

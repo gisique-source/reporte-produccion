@@ -14,6 +14,7 @@ from config import (
     MODO_FARDO_REINICIAR,
 )
 from models import DatosEtiqueta, RegistroPesaje, ResumenDia
+from utils import normalizar_lote
 from audit_store import SCHEMA_SYNC_AUDITORIA, SyncAuditMixin
 from audit_pesaje import SCHEMA_PESAJE_AUDITORIA, PesajeAuditMixin
 from restore_store import RestoreStoreMixin
@@ -515,6 +516,123 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
                 if cur.rowcount == 0:
                     raise ValueError("Registro no encontrado o ya visible.")
                 conn.commit()
+
+    def listar_ocultos_dia(
+        self,
+        dia: date,
+        *,
+        lote: str = "",
+        cliente: str = "",
+        color: str = "",
+        dn: str = "",
+        corte: str = "",
+        operario: str = "",
+    ) -> list[RegistroPesaje]:
+        """Registros ocultos del día, opcionalmente filtrados."""
+        inicio = dia.strftime("%Y-%m-%d 00:00:00")
+        fin = dia.strftime("%Y-%m-%d 23:59:59")
+        sql = [
+            "SELECT * FROM pesajes WHERE fecha_hora BETWEEN ? AND ? AND activo = 0"
+        ]
+        params: list[object] = [inicio, fin]
+        lote_norm = normalizar_lote(lote, anio=dia.year) if lote.strip() else ""
+        if lote_norm:
+            sql.append("AND lote = ?")
+            params.append(lote_norm)
+        elif lote.strip():
+            sql.append("AND lote LIKE ?")
+            params.append(f"%{lote.strip()}%")
+        if cliente.strip():
+            sql.append("AND cliente = ? COLLATE NOCASE")
+            params.append(cliente.strip())
+        if color.strip():
+            sql.append("AND color = ? COLLATE NOCASE")
+            params.append(color.strip())
+        if dn.strip():
+            sql.append("AND denier = ? COLLATE NOCASE")
+            params.append(dn.strip())
+        if corte.strip():
+            sql.append("AND corte = ? COLLATE NOCASE")
+            params.append(corte.strip())
+        if operario.strip():
+            sql.append("AND operario = ? COLLATE NOCASE")
+            params.append(operario.strip())
+        sql.append("ORDER BY id ASC")
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(" ".join(sql), params).fetchall()
+        return [self._row_to_registro(r) for r in rows]
+
+    def eliminar_definitivo(self, registro_id: int) -> RegistroPesaje:
+        """Borrado físico solo si el registro está oculto (activo=0)."""
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT * FROM pesajes WHERE id = ? AND activo = 0",
+                    (registro_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(
+                        "Solo se pueden eliminar definitivamente registros ocultos."
+                    )
+                reg = self._row_to_registro(row)
+                conn.execute("DELETE FROM pesajes WHERE id = ?", (registro_id,))
+                conn.commit()
+        self.registrar_auditoria_pesaje(
+            pesaje_id=reg.id,
+            accion="eliminar",
+            nro_fardo=reg.nro_fardo,
+            operario=reg.operario,
+            detalle=(
+                f"Eliminación definitiva · Lote {reg.lote} · "
+                f"Cliente {reg.cliente} · Color {reg.color}"
+            ),
+        )
+        return reg
+
+    def eliminar_ocultos_dia(
+        self,
+        dia: date,
+        *,
+        lote: str = "",
+        cliente: str = "",
+        color: str = "",
+        dn: str = "",
+        corte: str = "",
+        operario: str = "",
+    ) -> int:
+        """Borrado físico de ocultos del día que coincidan con los filtros."""
+        candidatos = self.listar_ocultos_dia(
+            dia,
+            lote=lote,
+            cliente=cliente,
+            color=color,
+            dn=dn,
+            corte=corte,
+            operario=operario,
+        )
+        if not candidatos:
+            return 0
+        ids = [r.id for r in candidatos]
+        with self._lock:
+            with self._connect() as conn:
+                conn.executemany(
+                    "DELETE FROM pesajes WHERE id = ? AND activo = 0",
+                    [(i,) for i in ids],
+                )
+                conn.commit()
+        for reg in candidatos:
+            self.registrar_auditoria_pesaje(
+                pesaje_id=reg.id,
+                accion="eliminar",
+                nro_fardo=reg.nro_fardo,
+                operario=reg.operario,
+                detalle=(
+                    f"Eliminación definitiva (lote/filtro) · Lote {reg.lote} · "
+                    f"Cliente {reg.cliente}"
+                ),
+            )
+        return len(candidatos)
 
     def listar_anios(self, *, desde: int = 2020) -> list[int]:
         """Años navegables: desde `desde` hasta el año actual (y los que tengan data)."""

@@ -18,10 +18,22 @@ from config import (
     LABEL_ORIGIN_X_MM,
     LABEL_ORIGIN_Y_MM,
     LABEL_WIDTH_MM,
-    _APP_DIR,
 )
+from utils import app_dir, data_dir, resource_path
 
-LAYOUT_PATH = os.path.join(_APP_DIR, "etiqueta_layout.json")
+
+def layout_path() -> str:
+    """Layout editable en carpeta de datos; si no existe, el empaquetado incluido."""
+    local = os.path.join(data_dir(), "etiqueta_layout.json")
+    if os.path.isfile(local):
+        return local
+    bundled = resource_path("etiqueta_layout.json")
+    if os.path.isfile(bundled):
+        return bundled
+    return local
+
+
+LAYOUT_PATH = layout_path()
 
 # Campos variables que se pueden colocar en la etiqueta
 FIELD_IDS: tuple[str, ...] = (
