@@ -352,6 +352,25 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
         val = row["m"] if row else None
         return int(val) if val is not None else 0
 
+    def ultimo_nro_fardo_ultimo_registro(self) -> int:
+        """Nº fardo del último registro guardado (cronológico), no el máximo histórico."""
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT nro_fardo FROM pesajes
+                    WHERE nro_fardo GLOB '[0-9]*'
+                    ORDER BY fecha_hora DESC, id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+        if not row:
+            return 0
+        try:
+            return int(str(row["nro_fardo"]).strip())
+        except ValueError:
+            return 0
+
     def ultimo_nro_fardo_antes(self, dia: date) -> int:
         """Máximo Nº de fardo anterior a ``dia`` (p. ej. correlativo del día previo)."""
         inicio = dia.strftime("%Y-%m-%d 00:00:00")
@@ -373,14 +392,17 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
         self, modo: Optional[str] = None, *, dia: Optional[date] = None
     ) -> int:
         """
-        Correlativo de Nº Fardo (los ocultos siguen contando en el máximo).
-        - continuar: último global + 1
-        - reiniciar: serie del día (fecha producción) desde 1
+        Correlativo de Nº Fardo (los ocultos siguen contando en el máximo del día).
+        - continuar: último registro guardado + 1 (cronológico, no MAX histórico)
+        - reiniciar: 1 si el día no tiene registros; si no, máximo del día + 1
         """
         modo = modo or self.get_modo_fardo()
+        d = dia or date.today()
         if modo == MODO_FARDO_REINICIAR:
-            return self.ultimo_nro_fardo(solo_hoy=True, dia=dia) + 1
-        return self.ultimo_nro_fardo(solo_hoy=False) + 1
+            ultimo_hoy = self.ultimo_nro_fardo(solo_hoy=True, dia=d)
+            return 1 if ultimo_hoy == 0 else ultimo_hoy + 1
+        ultimo = self.ultimo_nro_fardo_ultimo_registro()
+        return ultimo + 1 if ultimo > 0 else 1
 
     def por_fecha(
         self, dia: date, *, incluir_ocultos: bool = False

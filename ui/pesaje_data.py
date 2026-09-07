@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Optional
 
@@ -26,8 +27,13 @@ def asegurar_prefijo_lote(var_lote: tk.StringVar, anio: int) -> None:
     norm = normalizar_lote(cur, anio=anio)
     if norm:
         var_lote.set(norm)
-    elif not cur.upper().replace(" ", "").startswith(pref.upper().replace(" ", "")):
-        var_lote.set(pref + cur.strip())
+        return
+    compact = re.sub(r"\s+", "", cur.strip())
+    if compact.upper() == pref.upper():
+        var_lote.set(pref)
+        return
+    if compact.isdigit():
+        var_lote.set(f"{pref}{compact}")
 
 
 def normalizar_lote_campo(var_lote: tk.StringVar, anio: int) -> None:
@@ -168,7 +174,8 @@ def recoger_datos_pesaje(
     if not lote:
         if exigir_completo:
             return None, (
-                f"Lote incompleto. Use {lote_prefijo(fecha.year).strip()} + número."
+                f"Lote incompleto. Use {lote_prefijo(fecha.year)} + número "
+                f"(ej. {lote_prefijo(fecha.year)}15)."
             )
         return None, None
 

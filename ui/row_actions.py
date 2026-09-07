@@ -58,7 +58,7 @@ class TreeRowActions:
                 self._frames[iid] = fr
             self._fill(fr, list(acciones))
             x, y, w, h = bbox
-            fr.place(x=x + 1, y=y + 1, width=max(w - 2, 80), height=max(h - 2, 20))
+            fr.place(x=x + 1, y=y + 1, width=max(w - 2, 60), height=max(h - 2, 18))
         for iid in list(self._frames):
             if iid not in seen:
                 self._drop(iid)
@@ -70,7 +70,7 @@ class TreeRowActions:
             tk.Button(
                 fr,
                 text=texto,
-            font=("Segoe UI", 7, "bold"),
+                font=("Segoe UI", 6, "bold"),
                 fg="#ffffff",
                 bg=bg,
                 activebackground=bg,
@@ -78,9 +78,9 @@ class TreeRowActions:
                 relief=tk.FLAT,
                 cursor="hand2",
                 command=cmd,
-                padx=4,
+                padx=2,
                 pady=0,
-            ).pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1)
+            ).pack(side=tk.LEFT, padx=1)
 
     def _drop(self, iid: str) -> None:
         fr = self._frames.pop(iid, None)

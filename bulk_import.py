@@ -18,6 +18,7 @@ from catalog import CatalogoMaestros, MaestroTipo
 from config import TARA_CARRETA_KG, TARA_FARDO_KG
 from db import format_fecha_editable
 from models import DatosEtiqueta
+from utils import normalizar_lote
 
 # Claves internas de columna → patrones de encabezado (regex, case-insensitive)
 _HEADER_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -383,7 +384,7 @@ def parsear_matriz(
             FilaImport(
                 nro_fardo=re.sub(r"[^\d]", "", fardo) or fardo,
                 cliente=cli_prop or cli_raw,
-                lote=re.sub(r"\s+", " ", get("lote")).strip(),
+                lote=normalizar_lote(get("lote")) or get("lote").strip(),
                 color=col_prop or col_raw,
                 dn=dn_prop or dn_raw,
                 corte=corte_prop or corte_raw,

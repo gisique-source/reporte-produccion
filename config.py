@@ -121,8 +121,8 @@ def _sync_interval_seconds() -> int:
 SYNC_INTERVAL_S = _sync_interval_seconds()
 
 # Modo correlativo de Nº Fardo (persistido también en SQLite)
-# "continuar" = último global + 1 (incluye día anterior)
-# "reiniciar" = serie desde 1
+# "continuar" = último registro guardado + 1 (cronológico)
+# "reiniciar" = serie del día desde 1 (1 si el día está vacío)
 MODO_FARDO_CONTINUAR = "continuar"
 MODO_FARDO_REINICIAR = "reiniciar"
 MODO_FARDO_DEFAULT = MODO_FARDO_CONTINUAR

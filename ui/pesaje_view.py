@@ -306,7 +306,7 @@ class PesajeView(tk.Frame):
         ).pack(side=tk.LEFT, padx=(8, 4))
         tk.Button(
             modo_row,
-            text="Continuar del día anterior",
+            text="Continuar del registro anterior",
             font=("Segoe UI", 9, "bold"),
             relief=tk.FLAT,
             padx=10,
@@ -477,7 +477,10 @@ class PesajeView(tk.Frame):
             return
         self.var_modo_fardo.set(modo)
         self.db.set_modo_fardo(modo)
-        self._proponer_nro()
+        if modo == MODO_FARDO_REINICIAR:
+            self.var_nro.set("1")
+        else:
+            self._proponer_nro()
 
     def _proponer_nro(self) -> None:
         if not self.db:

@@ -40,8 +40,9 @@ from ui.time_picker import (
     snap_hora_15,
 )
 from ui.tree_excel import TreeExcelEditor
+from ui.pesaje_data import asegurar_prefijo_lote, lote_prefijo, normalizar_lote_campo
 from ui.widgets import Theme, confirm_modal, secondary_button, text_entry
-from utils import normalizar_lote, prefijo_lote
+from utils import normalizar_lote
 
 
 class HojaDiaView(tk.Frame):
@@ -61,7 +62,7 @@ class HojaDiaView(tk.Frame):
         ("hora", "Hora", 80),
         ("operario", "Operario", 90),
         ("sync", "Sync", 45),
-        ("accion", "Acción", 255),
+        ("accion", "Acción", 195),
     )
 
     def __init__(
@@ -413,7 +414,7 @@ class HojaDiaView(tk.Frame):
         self.btn_fardo_nuevo.pack(side=tk.LEFT, padx=(0, 6))
         self.btn_fardo_seguir = tk.Button(
             row_modo,
-            text="Continuar del día anterior",
+            text="Continuar del registro anterior",
             font=("Segoe UI", 9, "bold"),
             relief=tk.FLAT,
             padx=10,
@@ -667,16 +668,14 @@ class HojaDiaView(tk.Frame):
             self.btn_fardo_seguir.configure(**inactivo)
 
     def _nro_propuesto(self) -> int:
-        """Último fardo guardado del día + 1, o 1 / continuación del día anterior."""
+        """Último fardo del día + 1, o correlativo según modo (global / desde 1)."""
         activos = [r for r in (self._regs or []) if r.activo]
         if activos:
             try:
                 return int(str(activos[-1].nro_fardo).strip()) + 1
             except ValueError:
                 pass
-        if self.var_modo_fardo.get() == MODO_FARDO_REINICIAR:
-            return 1
-        return self.db.ultimo_nro_fardo_antes(self.fecha) + 1
+        return self.db.siguiente_nro_fardo(self.var_modo_fardo.get(), dia=self.fecha)
 
     def _on_nro_manual(self, _event=None) -> None:
         if not self._modo_nuevo:
@@ -696,13 +695,13 @@ class HojaDiaView(tk.Frame):
         if modo == MODO_FARDO_REINICIAR:
             nro = 1
         else:
-            nro = self.db.ultimo_nro_fardo_antes(self.fecha) + 1
+            nro = self._nro_propuesto()
         self.var_nro.set(str(nro))
         self.var_modo.set(f"Nuevo fardo #{nro}")
         origen = (
             "Contar de 1"
             if modo == MODO_FARDO_REINICIAR
-            else "Continuar del día anterior"
+            else "Continuar del registro anterior"
         )
         self.var_msg.set(f"{origen} → #{nro}. El próximo será {nro + 1} al guardar.")
         if self.tree.exists("__nuevo__"):
@@ -710,42 +709,18 @@ class HojaDiaView(tk.Frame):
         self._show_detail(None)
 
     def _lote_prefijo(self) -> str:
-        return prefijo_lote(self.fecha.year)
-
-    def _asegurar_prefijo_lote(self) -> None:
-        """Deja ``26LOC `` listo para que el operario solo complete el número."""
-        cur = self.var_lote.get()
-        pref = self._lote_prefijo()
-        if not cur.strip():
-            self.var_lote.set(pref)
-            return
-        norm = normalizar_lote(cur, anio=self.fecha.year)
-        if norm:
-            self.var_lote.set(norm)
-        elif not cur.upper().replace(" ", "").startswith(
-            pref.upper().replace(" ", "")
-        ):
-            self.var_lote.set(pref + cur.strip())
+        return lote_prefijo(self.fecha.year)
 
     def _on_lote_focus_in(self, _event=None) -> None:
-        self._asegurar_prefijo_lote()
-        # Cursor al final para escribir el número tras «26LOC »
+        asegurar_prefijo_lote(self.var_lote, self.fecha.year)
+        # Cursor al final para escribir el número tras «26LOC»
         try:
             self.ent_lote.icursor(tk.END)
         except tk.TclError:
             pass
 
     def _on_lote_focus_out(self, _event=None) -> None:
-        cur = self.var_lote.get().strip()
-        pref = self._lote_prefijo()
-        if not cur or cur.upper() == pref.strip().upper():
-            self.var_lote.set(pref)
-            return
-        norm = normalizar_lote(cur, anio=self.fecha.year)
-        if norm:
-            self.var_lote.set(norm)
-        else:
-            self._asegurar_prefijo_lote()
+        normalizar_lote_campo(self.var_lote, self.fecha.year)
 
     def refrescar(self) -> None:
         if hasattr(self, "excel"):
@@ -915,7 +890,7 @@ class HojaDiaView(tk.Frame):
         )
         self.var_msg.set("")
         self.refrescar_maestros()
-        self._asegurar_prefijo_lote()
+        asegurar_prefijo_lote(self.var_lote, self.fecha.year)
         if self.tree.exists("__nuevo__"):
             self.tree.set("__nuevo__", "fardo", str(nro))
             self.tree.set("__nuevo__", "hora", hora_now)
