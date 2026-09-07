@@ -1,4 +1,4 @@
-"""Ventana principal: pesaje, hoja, resumen, reportes, etiqueta y maestros."""
+"""Ventana principal: pesaje, hoja y menú secundario (resumen, reportes, etc.)."""
 
 from __future__ import annotations
 
@@ -29,6 +29,20 @@ try:
 except ImportError:  # pragma: no cover
     _TkBase = tk.Tk
 
+_VISTAS_PRINCIPALES: tuple[tuple[str, str], ...] = (
+    ("pesaje", "Pesaje"),
+    ("hoja", "Hoja de cálculo"),
+)
+
+_VISTAS_MENU: tuple[tuple[str, str], ...] = (
+    ("mes", "Resumen mensual"),
+    ("reportes", "Reportes"),
+    ("exportacion", "Exportación"),
+    ("auditoria", "Auditoría"),
+    ("etiqueta", "Etiqueta"),
+    ("maestros", "Maestros"),
+)
+
 
 class PrecixApp(_TkBase):
     def __init__(self) -> None:
@@ -41,6 +55,9 @@ class PrecixApp(_TkBase):
         self.db = PesajeDatabase()
         self.reader = SerialWeightReader(PORT)
         self.sync = SyncWorker(self.db)
+        self._vista_clave = "pesaje"
+        self._nav_btns: dict[str, tk.Button] = {}
+        self._menu_labels: dict[str, str] = dict(_VISTAS_MENU)
 
         self._build()
         self.bind_all("<Return>", self._on_print_key)
@@ -98,6 +115,78 @@ class PrecixApp(_TkBase):
         )
         self.lbl_sync.pack(side=tk.RIGHT, padx=(0, 12))
 
+        nav = tk.Frame(self, bg=Theme.BG)
+        nav.pack(fill=tk.X, padx=8, pady=(8, 0))
+
+        for clave, titulo in _VISTAS_PRINCIPALES:
+            btn = tk.Button(
+                nav,
+                text=f"  {titulo}  ",
+                font=("Segoe UI", 10, "bold"),
+                fg=Theme.FG,
+                bg=Theme.PANEL,
+                activeforeground=Theme.FG,
+                activebackground=Theme.TREE_HEAD,
+                relief=tk.FLAT,
+                padx=4,
+                pady=8,
+                cursor="hand2",
+                command=lambda k=clave: self._mostrar_vista(k),
+            )
+            btn.pack(side=tk.LEFT, padx=(0, 2))
+            self._nav_btns[clave] = btn
+
+        menu_fr = tk.Frame(nav, bg=Theme.BG)
+        menu_fr.pack(side=tk.LEFT, padx=(6, 0))
+        self.var_menu = tk.StringVar(value="Más  ▾")
+        self.btn_menu = tk.Menubutton(
+            menu_fr,
+            textvariable=self.var_menu,
+            font=("Segoe UI", 10, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+            activeforeground=Theme.FG,
+            activebackground=Theme.TREE_HEAD,
+            relief=tk.FLAT,
+            padx=12,
+            pady=8,
+            cursor="hand2",
+            direction="below",
+        )
+        self.btn_menu.pack(side=tk.LEFT)
+        self._menu = tk.Menu(
+            self.btn_menu,
+            tearoff=0,
+            bg=Theme.PANEL,
+            fg=Theme.FG,
+            activebackground=Theme.ACCENT,
+            activeforeground="#ffffff",
+            font=("Segoe UI", 10),
+        )
+        self.btn_menu.configure(menu=self._menu)
+        for clave, titulo in _VISTAS_MENU:
+            self._menu.add_command(
+                label=titulo,
+                command=lambda k=clave: self._mostrar_vista(k),
+            )
+
+        self.content = tk.Frame(self, bg=Theme.BG)
+        self.content.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        self.view_pesaje = PesajeView(
+            self.content, self.reader, self.db, on_saved=self._on_registro_guardado
+        )
+        self.view_hoja = HojaDiaView(
+            self.content,
+            self.db,
+            self.reader,
+            on_saved=self._on_registro_guardado,
+        )
+        self.view_mes = ResumenMesView(
+            self.content, self.db, on_open_day=self._abrir_dia
+        )
+        self.view_reportes = ReportesView(self.content, self.db)
+        self.view_exportacion = ExportacionView(self.content, self.db)
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("TNotebook", background=Theme.BG, borderwidth=0)
@@ -113,56 +202,65 @@ class PrecixApp(_TkBase):
             background=[("selected", Theme.ACCENT)],
             foreground=[("selected", "#fff")],
         )
-
-        self.nb = ttk.Notebook(self)
-        self.nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-        self.view_pesaje = PesajeView(
-            self.nb, self.reader, self.db, on_saved=self._on_registro_guardado
-        )
-        self.view_hoja = HojaDiaView(
-            self.nb,
-            self.db,
-            self.reader,
-            on_saved=self._on_registro_guardado,
-        )
-        self.view_mes = ResumenMesView(
-            self.nb, self.db, on_open_day=self._abrir_dia
-        )
-        self.view_reportes = ReportesView(self.nb, self.db)
-        self.view_exportacion = ExportacionView(self.nb, self.db)
-        self.tab_auditoria = ttk.Notebook(self.nb)
+        self.tab_auditoria = ttk.Notebook(self.content)
         self.view_auditoria = AuditoriaSyncView(
             self.tab_auditoria, self.db, sync=self.sync
         )
         self.view_aud_cambios = AuditoriaCambiosView(self.tab_auditoria, self.db)
         self.tab_auditoria.add(self.view_auditoria, text="  Sync nube  ")
         self.tab_auditoria.add(self.view_aud_cambios, text="  Cambios de hoja  ")
-        self.view_etiqueta = EtiquetaEditorView(self.nb)
+        self.view_etiqueta = EtiquetaEditorView(self.content)
         self.view_maestros = MaestrosView(
-            self.nb,
+            self.content,
             self.db.catalogo,
             on_change=self._on_maestros_change,
         )
 
-        self.nb.add(self.view_pesaje, text="  Pesaje  ")
-        self.nb.add(self.view_hoja, text="  Hoja de cálculo  ")
-        self.nb.add(self.view_mes, text="  Resumen mensual  ")
-        self.nb.add(self.view_reportes, text="  Reportes  ")
-        self.nb.add(self.view_exportacion, text="  Exportación  ")
-        self.nb.add(self.tab_auditoria, text="  Auditoría  ")
-        self.nb.add(self.view_etiqueta, text="  Etiqueta  ")
-        self.nb.add(self.view_maestros, text="  Maestros  ")
-        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self._vistas: dict[str, tk.Widget] = {
+            "pesaje": self.view_pesaje,
+            "hoja": self.view_hoja,
+            "mes": self.view_mes,
+            "reportes": self.view_reportes,
+            "exportacion": self.view_exportacion,
+            "auditoria": self.tab_auditoria,
+            "etiqueta": self.view_etiqueta,
+            "maestros": self.view_maestros,
+        }
+        self._mostrar_vista("pesaje")
 
-    def _on_tab_changed(self, _event=None) -> None:
+    def _mostrar_vista(self, clave: str) -> None:
+        if clave not in self._vistas:
+            return
+        actual = self._vistas.get(self._vista_clave)
+        if actual is not None:
+            actual.pack_forget()
+        self._vista_clave = clave
+        self._vistas[clave].pack(fill=tk.BOTH, expand=True)
+        self._actualizar_nav()
+        self._on_vista_changed(clave)
+
+    def _actualizar_nav(self) -> None:
+        for clave, btn in self._nav_btns.items():
+            activo = self._vista_clave == clave
+            btn.configure(
+                bg=Theme.ACCENT if activo else Theme.PANEL,
+                fg="#ffffff" if activo else Theme.FG,
+            )
+        if self._vista_clave in self._menu_labels:
+            self.var_menu.set(f"{self._menu_labels[self._vista_clave]}  ▾")
+            self.btn_menu.configure(bg=Theme.ACCENT, fg="#ffffff")
+        else:
+            self.var_menu.set("Más  ▾")
+            self.btn_menu.configure(bg=Theme.PANEL, fg=Theme.FG)
+
+    def _on_vista_changed(self, clave: str) -> None:
         try:
-            if self.nb.select() == str(self.tab_auditoria):
+            if clave == "auditoria":
                 self.view_auditoria.refrescar()
                 self.view_aud_cambios.refrescar()
-            elif self.nb.select() == str(self.view_exportacion):
+            elif clave == "exportacion":
                 self.view_exportacion.refrescar()
-            elif self.nb.select() == str(self.view_pesaje):
+            elif clave == "pesaje":
                 self.view_pesaje.al_mostrar()
         except tk.TclError:
             pass
@@ -232,7 +330,7 @@ class PrecixApp(_TkBase):
 
     def _abrir_dia(self, dia: date) -> None:
         self.view_hoja.set_fecha(dia)
-        self.nb.select(self.view_hoja)
+        self._mostrar_vista("hoja")
 
     def _refresh_device_light(self) -> None:
         """Luz superior derecha: verde si el indicador Precix está conectado."""
@@ -397,16 +495,10 @@ class PrecixApp(_TkBase):
         return None
 
     def _en_hoja(self) -> bool:
-        try:
-            return self.nb.select() == str(self.view_hoja)
-        except tk.TclError:
-            return False
+        return self._vista_clave == "hoja"
 
     def _en_pesaje(self) -> bool:
-        try:
-            return self.nb.select() == str(self.view_pesaje)
-        except tk.TclError:
-            return False
+        return self._vista_clave == "pesaje"
 
     def _on_close(self) -> None:
         self.sync.stop()
