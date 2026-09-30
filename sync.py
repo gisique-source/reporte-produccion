@@ -40,8 +40,9 @@ class SyncWorker:
     Cada intento se registra en sync_auditoria.
     """
 
-    def __init__(self, db: PesajeDatabase) -> None:
+    def __init__(self, db: PesajeDatabase, paradas=None) -> None:
         self.db = db
+        self._paradas = paradas
         self._pull = SyncPullClient(db)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -181,6 +182,7 @@ class SyncWorker:
                     break
                 if len(pendientes) < 50:
                     break
+            self._sync_paradas()
         finally:
             self.busy = False
             self._flush_lock.release()
@@ -190,6 +192,18 @@ class SyncWorker:
             "error": err_total,
             "restantes": self.db.contar_pendientes(),
         }
+
+    def _sync_paradas(self) -> None:
+        """Reintenta abrir/cerrar y trae la clasificación hecha en la nube."""
+        if self._paradas is None or not SYNC_TOKEN:
+            return
+        from paradas_api import bajar_clasificacion, flush_pendientes
+
+        try:
+            flush_pendientes(self._paradas)
+            bajar_clasificacion(self._paradas)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Sync paradas: %s", exc)
 
     def _auditar(self, reg: RegistroPesaje, result: _PostResult) -> None:
         try:

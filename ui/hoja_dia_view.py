@@ -29,6 +29,7 @@ from ui.bulk_paste_dialog import BulkPasteDialog
 from ui.bulk_file_dialog import BulkFileDialog
 from ui.date_picker import DatePicker
 from ui.drop_zone import ExcelPickDialog
+from ui.fardo_duplicado import mostrar_fardo_duplicado
 from ui.print_preview_dialog import PrintPreviewDialog
 from ui.row_actions import TreeRowActions
 from ui.searchable_dropdown import SearchableDropdown
@@ -97,7 +98,6 @@ class HojaDiaView(tk.Frame):
         self.var_operario = tk.StringVar()
         self.var_hora = tk.StringVar(value=snap_hora_15(""))
         self.var_ir_fecha = tk.StringVar(value=format_fecha_editable(date.today()))
-        self.var_mostrar_ocultos = tk.BooleanVar(value=False)
         self.var_modo_fardo = tk.StringVar(value=self.db.get_modo_fardo())
 
         self._regs: list[RegistroPesaje] = []
@@ -119,6 +119,7 @@ class HojaDiaView(tk.Frame):
         self._espera_bascula_cero = True
         self._iids_orden: list[str] = []
         self._editando_id: Optional[int] = None
+        self._nro_editado = False
 
         self._build()
         self.refrescar_maestros()
@@ -165,9 +166,9 @@ class HojaDiaView(tk.Frame):
             side=tk.LEFT, padx=(6, 0)
         )
 
-        # Pie fijo: pesaje compacto + detalle + totales
+        # La captura de fardos vive en Pesaje. El pie se construye para no
+        # romper la lógica de la hoja, pero no se muestra.
         foot = tk.Frame(self, bg=Theme.BG)
-        foot.pack(side=tk.BOTTOM, fill=tk.X)
         self._build_barra_compacta(foot)
 
         self.detail = tk.Text(
@@ -189,25 +190,50 @@ class HojaDiaView(tk.Frame):
         tools = tk.Frame(wrap, bg=Theme.BG)
         tools.pack(fill=tk.X, pady=(0, 4))
         self.tools_bar = tools
-        tk.Checkbutton(
-            tools,
-            text="Mostrar ocultos",
-            variable=self.var_mostrar_ocultos,
-            command=self._on_toggle_ocultos,
-            fg=Theme.FG,
-            bg=Theme.BG,
-            selectcolor=Theme.PANEL,
-            activebackground=Theme.BG,
-            activeforeground=Theme.FG,
-        ).pack(side=tk.LEFT)
-
         tk.Label(
             tools,
-            text="Amarillo = sin guardar  ·  Blanco = guardado  ·  acciones a la derecha de cada fila",
+            text="Ctrl + clic para elegir varios fardos",
             font=("Segoe UI", 9),
             fg=Theme.MUTED,
             bg=Theme.BG,
         ).pack(side=tk.LEFT, padx=(16, 0))
+
+        self.btn_ocultar_varios = tk.Button(
+            tools,
+            text="Ocultar varios",
+            font=("Segoe UI", 9, "bold"),
+            fg="#ffffff",
+            bg=Theme.US_COLOR,
+            relief=tk.FLAT,
+            padx=10,
+            pady=3,
+            cursor="hand2",
+            command=self._abrir_ocultar_varios,
+        )
+
+        self.btn_guardar = tk.Button(
+            tools,
+            text="GUARDAR",
+            font=("Segoe UI", 11, "bold"),
+            fg="#ffffff",
+            bg=Theme.BTN_BG,
+            activeforeground="#ffffff",
+            activebackground=Theme.BTN_ACTIVE,
+            relief=tk.FLAT,
+            padx=18,
+            pady=4,
+            cursor="hand2",
+            command=self._guardar_desde_hoja,
+        )
+        self.btn_guardar.pack(side=tk.RIGHT)
+        tk.Label(
+            tools,
+            textvariable=self.var_msg,
+            font=("Segoe UI", 9),
+            fg=Theme.MUTED,
+            bg=Theme.BG,
+            anchor="e",
+        ).pack(side=tk.RIGHT, padx=(8, 12))
 
         self._build_filtros_maestros(wrap)
 
@@ -245,7 +271,7 @@ class HojaDiaView(tk.Frame):
             cursor="hand2",
             command=self.eliminar_ocultos_lote_filtrado,
         ).pack(side=tk.LEFT)
-        self._sync_ocultos_bar()
+        self.ocultos_bar.pack(fill=tk.X, pady=(0, 6))
 
         style = ttk.Style()
         style.theme_use("clam")
@@ -266,7 +292,11 @@ class HojaDiaView(tk.Frame):
 
         cols = [c[0] for c in self.COLS]
         self.tree = ttk.Treeview(
-            wrap, columns=cols, show="headings", style="Hoja.Treeview"
+            wrap,
+            columns=cols,
+            show="headings",
+            style="Hoja.Treeview",
+            selectmode="extended",
         )
         for key, title, width in self.COLS:
             self.tree.heading(key, text=title)
@@ -745,6 +775,7 @@ class HojaDiaView(tk.Frame):
         return self.db.siguiente_nro_fardo(self.var_modo_fardo.get(), dia=self.fecha)
 
     def _on_nro_manual(self, _event=None) -> None:
+        self._nro_editado = True
         if not self._modo_nuevo:
             return
         nro = self.var_nro.get().strip()
@@ -764,6 +795,7 @@ class HojaDiaView(tk.Frame):
         else:
             nro = self._nro_propuesto()
         self.var_nro.set(str(nro))
+        self._nro_editado = False
         self.var_modo.set(f"Nuevo fardo #{nro}")
         origen = (
             "Contar de 1"
@@ -798,9 +830,7 @@ class HojaDiaView(tk.Frame):
             self._actualizar_lbl_modo_fardo()
         self.var_fecha.set(format_fecha_corta(self.fecha))
         self.var_ir_fecha.set(format_fecha_editable(self.fecha))
-        self._regs = self.db.por_fecha(
-            self.fecha, incluir_ocultos=self.var_mostrar_ocultos.get()
-        )
+        self._regs = self.db.por_fecha(self.fecha, incluir_ocultos=True)
         self.tree.delete(*self.tree.get_children())
         self._iids_orden = []
 
@@ -928,8 +958,12 @@ class HojaDiaView(tk.Frame):
 
         activos = [r for r in self._regs if r.activo] if self._regs else []
         last = activos[-1] if activos else None
-        if nro is None:
+        if nro is None and self._nro_editado:
+            raw = self.var_nro.get().strip()
+            nro = int(raw) if raw.isdigit() and int(raw) >= 1 else self._nro_propuesto()
+        elif nro is None:
             nro = self._nro_propuesto()
+            self._nro_editado = False
 
         if last:
             self.var_cliente.set(last.cliente)
@@ -1026,6 +1060,7 @@ class HojaDiaView(tk.Frame):
         return t.strftime("%I:%M %p").lstrip("0").lower()
 
     def _on_select(self, _event=None) -> None:
+        self._sync_btn_ocultar_varios()
         if self._ignore_tree_select:
             return
         sel = self.tree.selection()
@@ -1084,18 +1119,6 @@ class HojaDiaView(tk.Frame):
             return
         self.ocultar_seleccionado()
 
-    def _on_toggle_ocultos(self) -> None:
-        self._sync_ocultos_bar()
-        self.refrescar()
-
-    def _sync_ocultos_bar(self) -> None:
-        if not hasattr(self, "ocultos_bar"):
-            return
-        if self.var_mostrar_ocultos.get():
-            self.ocultos_bar.pack(fill=tk.X, pady=(0, 6))
-        else:
-            self.ocultos_bar.pack_forget()
-
     def _filtros_eliminacion(self) -> dict[str, str]:
         f = self._filtros_activos()
         return {
@@ -1107,48 +1130,209 @@ class HojaDiaView(tk.Frame):
             "operario": f.get("operario", ""),
         }
 
+    def _ids_de_iids(self, iids: list[str]) -> list[int]:
+        ids: list[int] = []
+        for iid in iids:
+            if iid == "__nuevo__":
+                continue
+            try:
+                ids.append(int(iid))
+            except ValueError:
+                continue
+        return ids
+
+    def _ids_seleccionados(self) -> list[int]:
+        return self._ids_de_iids(list(self.tree.selection()))
+
+    def _sync_btn_ocultar_varios(self) -> None:
+        if not hasattr(self, "btn_ocultar_varios"):
+            return
+        n = len(self._ids_seleccionados())
+        if n >= 2:
+            self.btn_ocultar_varios.configure(text=f"Ocultar varios ({n})")
+            if not self.btn_ocultar_varios.winfo_ismapped():
+                self.btn_ocultar_varios.pack(side=tk.LEFT, padx=(12, 0))
+        elif self.btn_ocultar_varios.winfo_ismapped():
+            self.btn_ocultar_varios.pack_forget()
+
+    def _abrir_ocultar_varios(self) -> None:
+        ids = self._ids_seleccionados()
+        if len(ids) < 2:
+            return
+        accion = self._preguntar_ocultar_varios(len(ids))
+        if accion == "ocultar":
+            self._ocultar_ids(ids, confirmar=False)
+        elif accion == "eliminar":
+            self._ocultar_y_eliminar_ids(ids, confirmar=False)
+
+    def _preguntar_ocultar_varios(self, cantidad: int) -> Optional[str]:
+        top = self.winfo_toplevel()
+        win = tk.Toplevel(top)
+        win.title("Ocultar varios")
+        win.configure(bg=Theme.PANEL)
+        win.transient(top)
+        win.resizable(False, False)
+        win.grab_set()
+        elegido: dict[str, Optional[str]] = {"v": None}
+
+        tk.Label(
+            win,
+            text=f"{cantidad} fardos seleccionados",
+            font=("Segoe UI", 13, "bold"),
+            fg=Theme.FG,
+            bg=Theme.PANEL,
+            anchor="w",
+        ).pack(fill=tk.X, padx=20, pady=(16, 6))
+        tk.Label(
+            win,
+            text="Ocultar los deja recuperables. Ocultar y eliminar los borra para siempre.",
+            font=("Segoe UI", 10),
+            fg=Theme.MUTED,
+            bg=Theme.PANEL,
+            wraplength=420,
+            justify=tk.LEFT,
+            anchor="w",
+        ).pack(fill=tk.X, padx=20, pady=(0, 16))
+
+        btns = tk.Frame(win, bg=Theme.PANEL)
+        btns.pack(fill=tk.X, padx=20, pady=(0, 16))
+
+        def _elegir(valor: Optional[str]) -> None:
+            elegido["v"] = valor
+            win.destroy()
+
+        tk.Button(
+            btns,
+            text="Cancelar",
+            font=("Segoe UI", 10),
+            fg=Theme.FG,
+            bg=Theme.TREE_HEAD,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=lambda: _elegir(None),
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            btns,
+            text="Ocultar y eliminar",
+            font=("Segoe UI", 10, "bold"),
+            fg="#ffffff",
+            bg=Theme.ERR_COLOR,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=lambda: _elegir("eliminar"),
+        ).pack(side=tk.RIGHT)
+        tk.Button(
+            btns,
+            text="Ocultar",
+            font=("Segoe UI", 10, "bold"),
+            fg="#ffffff",
+            bg=Theme.US_COLOR,
+            relief=tk.FLAT,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=lambda: _elegir("ocultar"),
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+
+        win.bind("<Escape>", lambda _e: _elegir(None))
+        win.wait_window()
+        return elegido["v"]
+
     def ocultar_seleccionado(self) -> None:
-        """Soft-delete del fardo (no borra; no libera el Nº)."""
-        sel = self.tree.selection()
-        if sel and sel[0] == "__nuevo__":
-            messagebox.showinfo(
-                "Hoja",
-                "Esa fila aún no está guardada. Complete los datos y el peso se registrará solo.",
+        """Soft-delete de la selección (ignora la fila nueva sin guardar)."""
+        ids = self._ids_seleccionados()
+        if not ids and self._selected_id is not None:
+            ids = [self._selected_id]
+        if not ids:
+            messagebox.showinfo("Hoja", "Seleccione un fardo guardado.")
+            return
+        self._ocultar_ids(ids)
+
+    def _ocultar_ids(self, ids: list[int], *, confirmar: bool = True) -> None:
+        regs = [r for r in self._regs if r.id in ids and r.activo]
+        if not regs:
+            messagebox.showinfo("Hoja", "No hay fardos activos en la selección.")
+            return
+        if len(regs) == 1:
+            texto = (
+                f"¿Ocultar fardo {regs[0].nro_fardo} (ID {regs[0].id})?\n\n"
+                "No se elimina de la base. El Nº de fardo no se reutiliza."
             )
+        else:
+            texto = f"¿Ocultar {len(regs)} fardos?\n\nNo se eliminan de la base."
+        if confirmar and not confirm_modal(self, "Ocultar fardo", texto, ok_text="Ocultar"):
             return
-        rid = self._selected_id
-        if rid is None:
-            if not sel:
-                messagebox.showinfo("Hoja", "Seleccione un fardo en la tabla.")
-                return
-            if sel[0] == "__nuevo__":
-                return
-            rid = int(sel[0])
-        reg = next((r for r in self._regs if r.id == rid), None)
-        if reg is None:
-            messagebox.showinfo("Hoja", "Seleccione un fardo en la tabla.")
-            return
-        if not reg.activo:
-            messagebox.showinfo("Hoja", "Ese fardo ya está oculto.")
-            return
-        if not confirm_modal(
-            self,
-            "Ocultar fardo",
-            f"¿Ocultar fardo {reg.nro_fardo} (ID {reg.id})?\n\n"
-            "No se elimina de la base (soft-delete). El Nº de fardo no se reutiliza.\n"
-            "Puede restaurarlo con «Mostrar ocultos» y el botón Restaurar de la fila.",
-            ok_text="Ocultar",
-        ):
-            return
-        try:
-            self.db.ocultar(rid)
-        except ValueError as exc:
-            messagebox.showwarning("Hoja", str(exc))
-            return
-        self.var_msg.set(f"Fardo {reg.nro_fardo} oculto (soft-delete)")
+        errores: list[str] = []
+        for reg in regs:
+            try:
+                self.db.ocultar(reg.id)
+            except ValueError as exc:
+                errores.append(str(exc))
+        self._selected_id = None
+        self.var_msg.set(f"{len(regs) - len(errores)} fardo(s) oculto(s)")
         self.refrescar()
         if self.on_saved:
             self.on_saved()
+        if errores:
+            messagebox.showwarning("Hoja", "\n".join(errores[:6]))
+
+    def ocultar_y_eliminar_seleccion(self) -> None:
+        ids = self._ids_seleccionados()
+        if not ids and self._selected_id is not None:
+            ids = [self._selected_id]
+        if not ids:
+            messagebox.showinfo("Hoja", "Seleccione un fardo guardado.")
+            return
+        self._ocultar_y_eliminar_ids(ids)
+
+    def _ocultar_y_eliminar_ids(self, ids: list[int], *, confirmar: bool = True) -> None:
+        regs = [r for r in self._regs if r.id in ids]
+        if not regs:
+            messagebox.showinfo("Hoja", "Seleccione un fardo guardado.")
+            return
+        if len(regs) == 1:
+            texto = (
+                f"¿Ocultar y eliminar PERMANENTEMENTE el fardo {regs[0].nro_fardo} "
+                f"(ID {regs[0].id})?\n\n"
+                f"Lote: {regs[0].lote} · Cliente: {regs[0].cliente}\n\n"
+                "Esta acción no se puede deshacer."
+            )
+        else:
+            texto = (
+                f"¿Ocultar y eliminar PERMANENTEMENTE {len(regs)} fardo(s)?\n\n"
+                "Esta acción no se puede deshacer."
+            )
+        if confirmar and not confirm_modal(
+            self,
+            "Ocultar y eliminar",
+            texto,
+            ok_text="Eliminar",
+            cancel_text="Cancelar",
+        ):
+            return
+        errores: list[str] = []
+        ok = 0
+        for reg in regs:
+            try:
+                if reg.activo:
+                    self.db.ocultar(reg.id)
+                self.db.eliminar_definitivo(reg.id)
+                ok += 1
+            except ValueError as exc:
+                errores.append(str(exc))
+        self._modo_nuevo = False
+        self._editando_id = None
+        self._selected_id = None
+        self.var_msg.set(f"{ok} fardo(s) eliminado(s)")
+        self.refrescar()
+        if self.on_saved:
+            self.on_saved()
+        if errores:
+            messagebox.showwarning("Hoja", "\n".join(errores[:6]))
 
     def restaurar_seleccionado(self) -> None:
         sel = self.tree.selection()
@@ -1168,7 +1352,7 @@ class HojaDiaView(tk.Frame):
             return
         if reg.activo:
             messagebox.showinfo(
-                "Hoja", "Ese fardo está activo. Active «Mostrar ocultos» para ver ocultos."
+                "Hoja", "Ese fardo está activo. Seleccione uno oculto para restaurarlo."
             )
             return
         try:
@@ -1182,12 +1366,6 @@ class HojaDiaView(tk.Frame):
             self.on_saved()
 
     def eliminar_seleccionado_definitivo(self) -> None:
-        if not self.var_mostrar_ocultos.get():
-            messagebox.showinfo(
-                "Hoja",
-                "Active «Mostrar ocultos» para eliminar registros ocultos.",
-            )
-            return
         sel = self.tree.selection()
         if sel and sel[0] == "__nuevo__":
             return
@@ -1232,12 +1410,6 @@ class HojaDiaView(tk.Frame):
             self.on_saved()
 
     def eliminar_ocultos_lote_filtrado(self) -> None:
-        if not self.var_mostrar_ocultos.get():
-            messagebox.showinfo(
-                "Hoja",
-                "Active «Mostrar ocultos» para eliminar registros ocultos.",
-            )
-            return
         filtros = self._filtros_eliminacion()
         lote_txt = filtros.get("lote", "").strip()
         if not lote_txt:
@@ -1320,7 +1492,7 @@ class HojaDiaView(tk.Frame):
             ]
         acciones = [
             ("Editar", Theme.ACCENT, lambda i=iid: self._iniciar_edicion(i)),
-            ("Ocultar", Theme.ERR_COLOR, lambda i=iid: self._ocultar_fila(i)),
+            ("Ocultar", Theme.US_COLOR, lambda i=iid: self._ocultar_fila(i)),
         ]
         if self._registro_completo(reg):
             acciones.insert(
@@ -1334,8 +1506,14 @@ class HojaDiaView(tk.Frame):
             rid = int(iid)
         except ValueError:
             return
-        self._selected_id = rid
-        self.ocultar_seleccionado()
+        self._ocultar_ids([rid])
+
+    def _ocultar_y_eliminar_fila(self, iid: str) -> None:
+        try:
+            rid = int(iid)
+        except ValueError:
+            return
+        self._ocultar_y_eliminar_ids([rid])
 
     def _restaurar_fila(self, iid: str) -> None:
         try:
@@ -1547,6 +1725,8 @@ class HojaDiaView(tk.Frame):
         var = mapping.get(key)
         if var is not None:
             var.set(texto)
+        if key == "fardo":
+            self._nro_editado = True
         if key == "hora" and hasattr(self, "tp_hora"):
             self.tp_hora.set(texto, notify=False)
         if key in ("total", "tara_c", "tara_f"):
@@ -1647,6 +1827,42 @@ class HojaDiaView(tk.Frame):
         if self.on_saved:
             self.on_saved()
 
+    def _lote_para_guardar(self) -> str:
+        """Lote visible en la fila (cualquier código) o el del formulario."""
+        texto = ""
+        if hasattr(self, "tree"):
+            iid = ""
+            if self._modo_nuevo and self.tree.exists("__nuevo__"):
+                iid = "__nuevo__"
+            elif self._target_id is not None and self.tree.exists(str(self._target_id)):
+                iid = str(self._target_id)
+            if iid:
+                texto = str(self.tree.set(iid, "lote") or "").strip()
+        if not texto or texto in ("—", "…"):
+            texto = self.var_lote.get()
+        lote = normalizar_lote(texto, anio=self.fecha.year)
+        if lote:
+            self.var_lote.set(lote)
+        return lote
+
+    def _nro_para_guardar(self) -> str:
+        """Número visible en la fila. No lo sustituye por el correlativo."""
+        texto = ""
+        if hasattr(self, "tree"):
+            iid = ""
+            if self._modo_nuevo and self.tree.exists("__nuevo__"):
+                iid = "__nuevo__"
+            elif self._target_id is not None and self.tree.exists(str(self._target_id)):
+                iid = str(self._target_id)
+            if iid:
+                texto = str(self.tree.set(iid, "fardo") or "").strip()
+        if not texto or texto in ("—", "…"):
+            texto = self.var_nro.get().strip()
+        if texto.isdigit():
+            texto = str(int(texto))
+            self.var_nro.set(texto)
+        return texto
+
     def _recoger(self, *, permitir_peso_guardado: bool = False) -> Optional[DatosEtiqueta]:
         total: Optional[float] = None
         bruto = neto = tc = tf = 0.0
@@ -1671,31 +1887,33 @@ class HojaDiaView(tk.Frame):
                 self.var_msg.set(f"Complete: {nombre}")
                 return None
 
-        lote = normalizar_lote(self.var_lote.get(), anio=self.fecha.year)
+        lote = self._lote_para_guardar()
         if not lote:
-            self.var_msg.set(
-                f"Lote incompleto. Use {self._lote_prefijo().strip()} + número "
-                f"(ej. {self._lote_prefijo()}15)"
-            )
-            self.var_lote.set(self._lote_prefijo())
-            try:
-                self.ent_lote.focus_set()
-                self.ent_lote.icursor(tk.END)
-            except tk.TclError:
-                pass
+            self.var_msg.set("Indique el lote.")
             return None
         self.var_lote.set(lote)
 
-        nro_txt = self.var_nro.get().strip()
+        nro_txt = self._nro_para_guardar()
         if not nro_txt.isdigit() or int(nro_txt) < 1:
             self.var_msg.set("Nº Fardo inválido")
             return None
         if self.db.existe_fardo_en_lote(
             lote, nro_txt, excluir_id=self._target_id
         ):
-            self.var_msg.set(
-                f"El fardo {nro_txt} ya existe en el lote {lote}"
-            )
+            self._duplicado_avisado = True
+            if mostrar_fardo_duplicado(
+                self, self.db, lote, nro_txt, excluir_id=self._target_id
+            ):
+                self.var_msg.set(
+                    f"Fardo {nro_txt} del lote {lote} eliminado. Vuelva a guardar."
+                )
+                self.refrescar()
+                if self.on_saved:
+                    self.on_saved()
+            else:
+                self.var_msg.set(
+                    f"El fardo {nro_txt} ya existe en el lote {lote}"
+                )
             return None
 
         hhmm = snap_hora_15(self.var_hora.get())
@@ -1748,7 +1966,7 @@ class HojaDiaView(tk.Frame):
         nro = self.var_nro.get().strip()
         if not nro.isdigit() or int(nro) < 1:
             return False
-        if not normalizar_lote(self.var_lote.get(), anio=self.fecha.year):
+        if not self._lote_para_guardar():
             return False
         total = self._peso_desde_fila_o_vivo()
         return total is not None and total >= 0.3
@@ -1802,7 +2020,15 @@ class HojaDiaView(tk.Frame):
         lote = normalizar_lote(self.var_lote.get(), anio=self.fecha.year)
         nro = self.var_nro.get().strip()
         if lote and self.db.existe_fardo_en_lote(lote, nro):
-            self.var_msg.set(f"El fardo {nro} ya existe en el lote {lote}")
+            if mostrar_fardo_duplicado(self, self.db, lote, nro):
+                self.var_msg.set(
+                    f"Fardo {nro} del lote {lote} eliminado. Vuelva a guardar."
+                )
+                self.refrescar()
+                if self.on_saved:
+                    self.on_saved()
+            else:
+                self.var_msg.set(f"El fardo {nro} ya existe en el lote {lote}")
             return
         if data.get("connected") and data.get("status") != "ST":
             return
@@ -1837,6 +2063,22 @@ class HojaDiaView(tk.Frame):
             self.excel.mark_saved(iid)
         if hasattr(self, "row_actions"):
             self.row_actions.sync()
+
+    def _guardar_desde_hoja(self) -> None:
+        """Botón de la hoja: confirma la fila amarilla o la edición activa."""
+        if hasattr(self, "excel"):
+            self.excel.commit()
+        sel = self.tree.selection()
+        if sel and sel[0] == "__nuevo__":
+            self._modo_nuevo = True
+            self._target_id = None
+            self._editando_id = None
+        self._duplicado_avisado = False
+        ok = self.guardar()
+        if ok or self._duplicado_avisado:
+            return
+        msg = self.var_msg.get().strip() or "No se pudo guardar el fardo."
+        messagebox.showwarning("Hoja", msg)
 
     def guardar(self) -> bool:
         """Registra la fila nueva (peso en vivo) o confirma edición."""
@@ -1883,6 +2125,7 @@ class HojaDiaView(tk.Frame):
                 )
                 self.var_msg.set(f"Fardo {datos.nro_fardo} registrado")
                 self._force_siguiente = True
+                self._nro_editado = False
                 self._espera_bascula_cero = True
         except ValueError as exc:
             messagebox.showwarning("Hoja", str(exc))

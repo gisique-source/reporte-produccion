@@ -173,10 +173,7 @@ def recoger_datos_pesaje(
     lote = normalizar_lote(var_lote.get(), anio=fecha.year)
     if not lote:
         if exigir_completo:
-            return None, (
-                f"Lote incompleto. Use {lote_prefijo(fecha.year)} + número "
-                f"(ej. {lote_prefijo(fecha.year)}15)."
-            )
+            return None, "Indique el lote."
         return None, None
 
     nro_txt = var_nro.get().strip()

@@ -20,7 +20,9 @@ from db import PesajeDatabase, format_fecha_editable
 from models import DatosEtiqueta
 from serial_reader import SerialWeightReader
 from ui.date_picker import DatePicker
+from ui.fardo_duplicado import mostrar_fardo_duplicado
 from ui.label_preview import LabelPreviewPanel
+from ui.pesaje_historial import PesajeHistorial
 from ui.print_preview_dialog import PrintPreviewDialog
 from ui.searchable_dropdown import SearchableDropdown
 from ui.pesaje_data import (
@@ -56,6 +58,7 @@ class PesajeView(tk.Frame):
         self._peso_manual: Optional[float] = None
         self._ultimo_guardado: Optional[DatosEtiqueta] = None
         self._esperar_refresco = False
+        self._nro_editado = False
 
         self.var_fecha = tk.StringVar(value=format_fecha_editable(self.fecha))
         self.var_nro = tk.StringVar()
@@ -135,16 +138,14 @@ class PesajeView(tk.Frame):
         ).pack(side=tk.RIGHT)
 
         body = tk.Frame(self, bg=Theme.BG)
-        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 10))
+        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 4))
         body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2, minsize=520)
+        body.columnconfigure(1, weight=2, minsize=420)
         body.rowconfigure(0, weight=1)
+        body.rowconfigure(1, weight=0)
 
         left = tk.Frame(body, bg=Theme.BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-
-        foot = tk.Frame(left, bg=Theme.BG)
-        foot.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
         scroll = ScrollableFrame(left, bg=Theme.BG)
         scroll.pack(fill=tk.BOTH, expand=True)
@@ -229,6 +230,7 @@ class PesajeView(tk.Frame):
             widget.grid(row=row * 2 + 1, column=col, sticky="ew", padx=(0, 10), pady=(0, 6))
 
         self.ent_nro = text_entry(form, self.var_nro, 6)
+        self.ent_nro.bind("<KeyRelease>", self._marcar_nro_editado)
         _cell(0, 0, "Nº Fardo", self.ent_nro)
 
         self.cb_cliente = self._dd_maestro(form, self.var_cliente, "cliente", 16)
@@ -315,6 +317,11 @@ class PesajeView(tk.Frame):
             command=lambda: self._set_modo_fardo(MODO_FARDO_CONTINUAR),
         ).pack(side=tk.LEFT)
 
+        self.historial = PesajeHistorial(body)
+        self.historial.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+        foot = tk.Frame(self, bg=Theme.BG)
+        foot.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 10))
         tk.Label(
             foot,
             textvariable=self.var_msg,
@@ -359,6 +366,11 @@ class PesajeView(tk.Frame):
         right.grid(row=0, column=1, sticky="nsew")
         self.preview = LabelPreviewPanel(right)
         self.preview.pack(fill=tk.BOTH, expand=True)
+
+        foot.pack_forget()
+        body.pack_forget()
+        foot.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 10))
+        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(4, 4))
 
     @staticmethod
     def _make_indicador(
@@ -452,15 +464,16 @@ class PesajeView(tk.Frame):
             )
         else:
             self._limpiar_maestros()
-        self._proponer_nro()
         self.refrescar_maestros()
         self._actualizar_preview()
+        self._cargar_historial()
 
     def al_mostrar(self) -> None:
         """Sincroniza maestros; no cambia el Nº si aún no se pulsó Refrescar."""
         self.refrescar_maestros()
-        if not self._esperar_refresco:
+        if not self._esperar_refresco and not self.var_nro.get().strip():
             self._proponer_nro()
+        self._cargar_historial()
 
     def _on_lote_focus_in(self, _event=None) -> None:
         asegurar_prefijo_lote(self.var_lote, self.fecha.year)
@@ -482,6 +495,9 @@ class PesajeView(tk.Frame):
         else:
             self._proponer_nro()
 
+    def _marcar_nro_editado(self, _event=None) -> None:
+        self._nro_editado = True
+
     def _proponer_nro(self) -> None:
         if not self.db:
             return
@@ -489,6 +505,7 @@ class PesajeView(tk.Frame):
             self.db, self.var_modo_fardo.get(), self.fecha
         )
         self.var_nro.set(str(nro))
+        self._nro_editado = False
 
     def refrescar_maestros(self) -> None:
         if not self.db:
@@ -546,6 +563,7 @@ class PesajeView(tk.Frame):
         self._proponer_nro()
         self.refrescar_maestros()
         self.var_msg.set("")
+        self._cargar_historial()
         self._actualizar_preview()
 
     def _taras(self) -> tuple[float, float]:
@@ -820,10 +838,17 @@ class PesajeView(tk.Frame):
             return False
 
         if self.db.existe_fardo_en_lote(datos.lote, datos.nro_fardo):
-            self.var_msg.set(
-                f"El fardo {datos.nro_fardo} ya existe en el lote {datos.lote}"
-            )
-            messagebox.showwarning("Pesaje", self.var_msg.get(), parent=self)
+            if mostrar_fardo_duplicado(
+                self, self.db, datos.lote, datos.nro_fardo
+            ):
+                self.var_msg.set(
+                    f"Fardo {datos.nro_fardo} del lote {datos.lote} eliminado. "
+                    "Vuelva a guardar."
+                )
+            else:
+                self.var_msg.set(
+                    f"El fardo {datos.nro_fardo} ya existe en el lote {datos.lote}"
+                )
             return False
 
         aviso_peso = ""
@@ -869,6 +894,7 @@ class PesajeView(tk.Frame):
         )
         self._ultimo_guardado = datos
         self._esperar_refresco = True
+        self._cargar_historial()
         self.btn_imprimir.pack(side=tk.RIGHT, padx=(0, 8), before=self.btn_guardar)
         if self.on_saved:
             self.on_saved()
@@ -886,6 +912,11 @@ class PesajeView(tk.Frame):
                 f"Fardo {datos.nro_fardo} enviado a impresora"
             ),
         )
+
+    def _cargar_historial(self) -> None:
+        if not hasattr(self, "historial"):
+            return
+        self.historial.cargar(self._registros_activos_dia(self.fecha))
 
     def _preparar_siguiente(self) -> None:
         """Restablece el formulario: siguiente Nº, hora actual y peso en vivo."""

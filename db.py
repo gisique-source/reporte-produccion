@@ -187,6 +187,34 @@ class PesajeDatabase(SyncAuditMixin, PesajeAuditMixin, RestoreStoreMixin):
                 ).fetchone()
         return self._row_to_registro(row) if row else None
 
+    def listar_fardos_en_lote(
+        self,
+        lote: str,
+        nro_fardo: str,
+        *,
+        excluir_id: Optional[int] = None,
+    ) -> list[RegistroPesaje]:
+        """Todos los registros con ese lote y Nº (activos y ocultos)."""
+        lote = (lote or "").strip()
+        nro = str(nro_fardo or "").strip()
+        if not lote or not nro:
+            return []
+        sql = """
+            SELECT * FROM pesajes
+            WHERE lote = ? COLLATE NOCASE
+              AND CAST(nro_fardo AS INTEGER) = CAST(? AS INTEGER)
+              AND nro_fardo GLOB '[0-9]*'
+        """
+        params: list[object] = [lote, nro]
+        if excluir_id is not None:
+            sql += " AND id != ?"
+            params.append(int(excluir_id))
+        sql += " ORDER BY fecha_hora ASC, id ASC"
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_registro(r) for r in rows]
+
     @staticmethod
     def _existe_fardo_en_lote(
         conn: sqlite3.Connection,

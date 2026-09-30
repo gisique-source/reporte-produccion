@@ -9,10 +9,14 @@ from tkinter import messagebox, ttk
 
 from config import PORT, SYNC_INTERVAL_S, SYNC_TOKEN, UI_REFRESH_MS
 from db import PesajeDatabase
+from paradas_store import ParadasStore
 from serial_reader import SerialWeightReader
 from sync import SyncWorker
 from ui.auditoria_cambios_view import AuditoriaCambiosView
 from ui.auditoria_view import AuditoriaSyncView
+from ui.parada_control import ParadaControl
+from ui.paradas_audit_view import ParadasAuditView
+from ui.paradas_historial_view import ParadasHistorialView
 from ui.exportacion_view import ExportacionView
 from ui.etiqueta_editor_view import EtiquetaEditorView
 from ui.hoja_dia_view import HojaDiaView
@@ -38,6 +42,7 @@ _VISTAS_MENU: tuple[tuple[str, str], ...] = (
     ("mes", "Resumen mensual"),
     ("reportes", "Reportes"),
     ("exportacion", "Exportación"),
+    ("paradas", "Historial de paradas"),
     ("auditoria", "Auditoría"),
     ("etiqueta", "Etiqueta"),
     ("maestros", "Maestros"),
@@ -54,8 +59,9 @@ class PrecixApp(_TkBase):
         self._set_window_icon()
 
         self.db = PesajeDatabase()
+        self.paradas = ParadasStore(self.db)
         self.reader = SerialWeightReader(PORT)
-        self.sync = SyncWorker(self.db)
+        self.sync = SyncWorker(self.db, paradas=self.paradas)
         self._vista_clave = "pesaje"
         self._nav_btns: dict[str, tk.Button] = {}
         self._menu_labels: dict[str, str] = dict(_VISTAS_MENU)
@@ -120,6 +126,7 @@ class PrecixApp(_TkBase):
             command=self._show_device_info,
         )
         self.btn_device.pack(side=tk.RIGHT)
+        self.parada_ui = ParadaControl(self, right, self.paradas)
 
         self.lbl_sync = tk.Label(
             right,
@@ -222,8 +229,11 @@ class PrecixApp(_TkBase):
             self.tab_auditoria, self.db, sync=self.sync
         )
         self.view_aud_cambios = AuditoriaCambiosView(self.tab_auditoria, self.db)
+        self.view_paradas = ParadasAuditView(self.tab_auditoria, self.paradas)
+        self.view_historial_paradas = ParadasHistorialView(self.content, self.paradas)
         self.tab_auditoria.add(self.view_auditoria, text="  Sync nube  ")
         self.tab_auditoria.add(self.view_aud_cambios, text="  Cambios de hoja  ")
+        self.tab_auditoria.add(self.view_paradas, text="  Paradas  ")
         self.view_etiqueta = EtiquetaEditorView(self.content)
         self.view_maestros = MaestrosView(
             self.content,
@@ -237,6 +247,7 @@ class PrecixApp(_TkBase):
             "mes": self.view_mes,
             "reportes": self.view_reportes,
             "exportacion": self.view_exportacion,
+            "paradas": self.view_historial_paradas,
             "auditoria": self.tab_auditoria,
             "etiqueta": self.view_etiqueta,
             "maestros": self.view_maestros,
@@ -273,6 +284,9 @@ class PrecixApp(_TkBase):
             if clave == "auditoria":
                 self.view_auditoria.refrescar()
                 self.view_aud_cambios.refrescar()
+                self.view_paradas.actualizar()
+            elif clave == "paradas":
+                self.view_historial_paradas.actualizar()
             elif clave == "exportacion":
                 self.view_exportacion.refrescar()
             elif clave == "pesaje":

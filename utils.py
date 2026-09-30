@@ -55,10 +55,9 @@ def normalizar_lote(
     texto: str, *, anio: int | None = None, sufijo: str = "LOC"
 ) -> str:
     """
-    Normaliza a ``YYLOCN`` (ej. ``26LOC3606``), sin espacio entre sufijo y número.
-
-    Acepta solo el número, ``26LOC3606``, ``26LOC 3606``, otro sufijo (``26ABC15``), etc.
-    Retorna ``""`` si no hay número de lote.
+    Limpia el lote. Los formatos ``26LOC3606`` o un número suelto se normalizan;
+    cualquier otro código (ej. ``26PER19PAG03``) se conserva tal cual.
+    Retorna ``""`` solo si el texto está vacío.
     """
     y = anio if anio is not None else date.today().year
     suf = sufijo.upper()
@@ -92,4 +91,4 @@ def normalizar_lote(
     if compact.isdigit():
         return f"{pref}{compact}"
 
-    return ""
+    return re.sub(r"\s+", " ", raw).strip()

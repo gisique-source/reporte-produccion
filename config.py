@@ -129,6 +129,28 @@ def _sync_interval_seconds() -> int:
 
 SYNC_INTERVAL_S = _sync_interval_seconds()
 
+
+def _paradas_base_url(sync_url: str) -> str:
+    """Mismo host que los pesajes, ruta /api/v1/paradas."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(sync_url or "")
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}/api/v1/paradas"
+    return "https://example.com/api/v1/paradas"
+
+
+PARADAS_API_BASE = (
+    os.environ.get("PARADAS_API_BASE") or _paradas_base_url(SYNC_API_URL)
+).rstrip("/")
+PARADAS_TOKEN = (
+    os.environ.get("PARADAS_SYNC_TOKEN") or SYNC_TOKEN
+).strip()
+PARADAS_PLANTA = (
+    os.environ.get("PARADAS_PLANTA") or SYNC_PLANTA
+).strip()
+PARADAS_AREA = (os.environ.get("PARADAS_AREA") or "EXTRUSORA").strip().upper()
+
 # Modo correlativo de Nº Fardo (persistido también en SQLite)
 # "continuar" = último registro guardado + 1 (cronológico)
 # "reiniciar" = serie del día desde 1 (1 si el día está vacío)
